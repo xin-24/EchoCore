@@ -1,0 +1,15 @@
+# Local design documents
+docs/
+
+# Local configuration and secrets
+config.yaml
+.env
+
+# Build and test outputs
+bin/
+coverage.out
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,10 @@
+server:
+  host: "127.0.0.1"
+  port: 8080
+
+onebot:
+  path: "/onebot/v11/ws"
+  access_token: ""
+
+bot:
+  command_prefix: "/"
