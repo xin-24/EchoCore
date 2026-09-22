@@ -3,6 +3,7 @@ package onebot
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -14,8 +15,9 @@ import (
 const maxMessageSize = 8 << 20
 
 // WebSocketHandler accepts the OneBot 11 reverse WebSocket connection from
-// NapCat. Event decoding and dispatching are intentionally handled by later
-// phases; this handler only owns connection setup and lifecycle.
+// NapCat. It records each complete OneBot JSON frame for transport-level
+// diagnostics. Event decoding and dispatching are intentionally handled by
+// later phases.
 type WebSocketHandler struct {
 	logger      *slog.Logger
 	shutdown    context.Context
@@ -78,12 +80,24 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		logger.Debug(
-			"OneBot WebSocket frame received",
-			"message_type", int(messageType),
-			"bytes", len(payload),
-		)
+		logFrame(logger, messageType, payload)
 	}
+}
+
+func logFrame(logger *slog.Logger, messageType websocket.MessageType, payload []byte) {
+	attributes := []any{
+		"message_type", int(messageType),
+		"bytes", len(payload),
+	}
+
+	if json.Valid(payload) {
+		attributes = append(attributes, "event", json.RawMessage(payload))
+		logger.Info("OneBot event received", attributes...)
+		return
+	}
+
+	attributes = append(attributes, "payload", string(payload))
+	logger.Warn("OneBot WebSocket frame is not valid JSON", attributes...)
 }
 
 func (h *WebSocketHandler) authorized(r *http.Request) bool {

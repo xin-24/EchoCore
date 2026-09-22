@@ -11,8 +11,9 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 优雅停机
 - OneBot 11 反向 WebSocket 接入点：`/onebot/v11/ws`
 - 可选的 OneBot Access Token 校验
+- 原始 OneBot JSON 事件的结构化终端日志
 
-OneBot 事件解析、消息模型、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+OneBot 事件的数据结构定义、消息模型、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -48,6 +49,22 @@ ECHOCORE_SERVER_HOST=0.0.0.0 ECHOCORE_SERVER_PORT=9090 go run ./cmd/server
    ```
 
 4. 保存配置。EchoCore 控制台出现 `OneBot WebSocket connected` 即表示 Step 3 连接成功。
+
+### 查看原始 OneBot 事件
+
+保持 EchoCore 和 NapCat 运行，然后使用另一个 QQ 账号依次执行：
+
+1. 向机器人 QQ 发送私聊文本 `step4-private`。
+2. 在机器人所在群发送普通文本 `step4-group`。
+3. 在群内发送 `@机器人 step4-at`。
+
+EchoCore 终端会为每个事件输出一行结构化 JSON 日志，其中 `event` 字段是 NapCat 发来的完整 OneBot JSON。例如：
+
+```json
+{"level":"INFO","msg":"OneBot event received","component":"onebot.websocket","event":{"post_type":"message","message_type":"private","message":[{"type":"text","data":{"text":"step4-private"}}]}}
+```
+
+群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。当前 Step 4 只观察并记录事件，不会自动回复 QQ 消息。
 
 本地开发默认不校验 Token。如需启用，EchoCore 和 NapCat 必须配置相同值：
 
