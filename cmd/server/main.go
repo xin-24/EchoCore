@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xin-24/EchoCore/internal/adapter/onebot"
 	"github.com/xin-24/EchoCore/internal/config"
 )
 
@@ -25,17 +26,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	server := &http.Server{
 		Addr:              cfg.Server.Address(),
-		Handler:           newHandler(),
+		Handler:           newHandler(logger, cfg, ctx),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -65,13 +66,18 @@ func main() {
 	logger.Info("EchoCore stopped")
 }
 
-func newHandler() http.Handler {
+func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
+	mux.Handle("GET "+cfg.OneBot.Path, onebot.NewWebSocketHandler(
+		logger,
+		shutdown,
+		cfg.OneBot.AccessToken,
+	))
 
 	return mux
 }

@@ -1,6 +1,6 @@
 # EchoCore
 
-EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当前仓库处于 Phase 1 的项目初始化阶段：先建立可稳定启停的 HTTP 服务和健康检查，再接入 NapCat 与 OneBot 11。
+EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当前仓库处于 Phase 1：已经完成基础 HTTP 服务，并开始接入 NapCat 与 OneBot 11。
 
 ## 当前范围
 
@@ -9,8 +9,10 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 可配置的 HTTP 监听地址
 - `GET /health` 健康检查
 - 优雅停机
+- OneBot 11 反向 WebSocket 接入点：`/onebot/v11/ws`
+- 可选的 OneBot Access Token 校验
 
-OneBot、消息模型、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+OneBot 事件解析、消息模型、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -29,6 +31,31 @@ ECHOCORE_SERVER_HOST=0.0.0.0 ECHOCORE_SERVER_PORT=9090 go run ./cmd/server
 ```
 
 `config.example.yaml` 记录 Phase 1 的目标配置结构；初始化步骤的运行时配置使用上述环境变量。真实 `config.yaml` 已被 Git 忽略。
+
+## NapCat 反向 WebSocket
+
+1. 启动 EchoCore：
+
+   ```bash
+   go run ./cmd/server
+   ```
+
+2. 打开 NapCat WebUI，在 OneBot 11 的网络配置中新增并启用 **WebSocket 客户端（反向 WebSocket）**。
+3. 将 URL 设置为：
+
+   ```text
+   ws://127.0.0.1:8080/onebot/v11/ws
+   ```
+
+4. 保存配置。EchoCore 控制台出现 `OneBot WebSocket connected` 即表示 Step 3 连接成功。
+
+本地开发默认不校验 Token。如需启用，EchoCore 和 NapCat 必须配置相同值：
+
+```bash
+ECHOCORE_ONEBOT_ACCESS_TOKEN=your-token go run ./cmd/server
+```
+
+WebSocket 路径也可通过 `ECHOCORE_ONEBOT_PATH` 修改。NapCat 中的 URL 必须同步修改。
 
 ## 健康检查
 
