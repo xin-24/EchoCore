@@ -12,8 +12,9 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - OneBot 11 反向 WebSocket 接入点：`/onebot/v11/ws`
 - 可选的 OneBot Access Token 校验
 - 原始 OneBot JSON 事件的结构化终端日志
+- OneBot 11 协议数据结构：`Event`、`MessageSegment`、`Action`、`ActionResponse`
 
-OneBot 事件的数据结构定义、消息模型、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+OneBot Event 到平台无关消息模型的转换、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -73,6 +74,17 @@ ECHOCORE_ONEBOT_ACCESS_TOKEN=your-token go run ./cmd/server
 ```
 
 WebSocket 路径也可通过 `ECHOCORE_ONEBOT_PATH` 修改。NapCat 中的 URL 必须同步修改。
+
+## OneBot 数据结构
+
+Step 5 在 `internal/onebot` 中定义协议层数据结构：
+
+- `Event`：OneBot 事件公共字段，以及 Phase 1 所需的私聊、群聊和元事件字段。
+- `MessageSegment`：数组格式消息段，当前声明 `text` 和 `at` 类型常量，同时保留扩展参数。
+- `Action`：发送给 OneBot 的动作名称、参数和原始 `echo`。
+- `ActionResponse`：动作状态、返回码、原始响应数据和原始 `echo`。
+
+这些类型只描述 OneBot 协议。转换为 EchoCore 自己的 `IncomingMessage` 属于 Step 6。
 
 ## 健康检查
 
