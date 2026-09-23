@@ -13,8 +13,9 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 可选的 OneBot Access Token 校验
 - 原始 OneBot JSON 事件的结构化终端日志
 - OneBot 11 协议数据结构：`Event`、`MessageSegment`、`Action`、`ActionResponse`
+- OneBot Event 到平台无关 `IncomingMessage` 的转换
 
-OneBot Event 到平台无关消息模型的转换、Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -84,7 +85,18 @@ Step 5 在 `internal/onebot` 中定义协议层数据结构：
 - `Action`：发送给 OneBot 的动作名称、参数和原始 `echo`。
 - `ActionResponse`：动作状态、返回码、原始响应数据和原始 `echo`。
 
-这些类型只描述 OneBot 协议。转换为 EchoCore 自己的 `IncomingMessage` 属于 Step 6。
+这些类型只描述 OneBot 协议。
+
+## OneBot Adapter
+
+Step 6 由 `internal/adapter/onebot.Adapter` 将 OneBot 消息事件转换为 `internal/message.IncomingMessage`：
+
+- 将 OneBot 数字 ID 转换为平台无关模型使用的字符串 ID。
+- 区分私聊和群聊，并设置 `GroupID` 与 `IsGroup`。
+- 按顺序拼接 `text` segment，忽略图片等未知 segment。
+- 仅当 `at` segment 指向机器人自身 QQ号时设置 `Mentioned`。
+
+当前 Adapter 只负责模型转换；消息分发、命令处理、群聊触发规则和自身消息过滤将在后续步骤实现。
 
 ## 健康检查
 
