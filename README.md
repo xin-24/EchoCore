@@ -14,8 +14,9 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 原始 OneBot JSON 事件的结构化终端日志
 - OneBot 11 协议数据结构：`Event`、`MessageSegment`、`Action`、`ActionResponse`
 - OneBot Event 到平台无关 `IncomingMessage` 的转换
+- 仅支持 `/ping` 与 `/help` 的平台无关 Dispatcher
 
-Dispatcher 和命令处理器将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+OneBot Action 发送与响应关联将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -96,7 +97,16 @@ Step 6 由 `internal/adapter/onebot.Adapter` 将 OneBot 消息事件转换为 `i
 - 按顺序拼接 `text` segment，忽略图片等未知 segment。
 - 仅当 `at` segment 指向机器人自身 QQ号时设置 `Mentioned`。
 
-当前 Adapter 只负责模型转换；消息分发、命令处理、群聊触发规则和自身消息过滤将在后续步骤实现。
+Adapter 只负责模型转换；消息分发和命令处理由下一节的 Dispatcher 负责，自身消息过滤将在后续步骤实现。
+
+## Dispatcher
+
+Step 7 提供平台无关的 Dispatcher，并注册两个命令 Handler：
+
+- `/ping`：返回 `pong`。
+- `/help`：返回当前命令帮助。
+
+私聊命令会回复原用户；群聊只有在 `Mentioned=true` 时才会回复原群。未知命令、带额外参数的命令和未 @ 机器人的群消息会被忽略。当前尚未实现 OneBot Action Sender，因此 Dispatcher 的结果还不会发送到 QQ。
 
 ## 健康检查
 
