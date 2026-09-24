@@ -2,7 +2,7 @@ package onebot
 
 import "encoding/json"
 
-// ActionName identifies a OneBot API action.
+// ActionName 标识一个 OneBot API 动作。
 type ActionName string
 
 const (
@@ -10,7 +10,7 @@ const (
 	ActionSendGroupMsg   ActionName = "send_group_msg"
 )
 
-// ActionStatus is the result status returned by a OneBot implementation.
+// ActionStatus 表示 OneBot 实现返回的动作执行状态。
 type ActionStatus string
 
 const (
@@ -18,19 +18,19 @@ const (
 	ActionStatusFailed ActionStatus = "failed"
 )
 
-// ActionParams contains action-specific parameters.
+// ActionParams 保存不同动作各自需要的参数。
 type ActionParams map[string]any
 
-// Action is a request sent to a OneBot implementation over WebSocket. Echo is
-// kept as raw JSON because the OneBot 11 protocol permits any JSON value.
+// Action 表示通过 WebSocket 发送给 OneBot 实现的请求。
+// OneBot 11 协议允许 echo 使用任意 JSON 值，因此这里保留其原始 JSON。
 type Action struct {
 	Action ActionName      `json:"action"`
 	Params ActionParams    `json:"params,omitempty"`
 	Echo   json.RawMessage `json:"echo,omitempty"`
 }
 
-// ActionResponse is the result returned for a OneBot action. Data remains raw
-// until the caller knows which action-specific response type to decode.
+// ActionResponse 表示 OneBot 动作的执行结果。
+// 在调用方确定具体动作的响应类型前，Data 保持为原始 JSON。
 type ActionResponse struct {
 	Status  ActionStatus    `json:"status"`
 	RetCode int             `json:"retcode"`

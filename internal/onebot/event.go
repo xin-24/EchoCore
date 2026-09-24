@@ -1,6 +1,6 @@
 package onebot
 
-// PostType identifies the top-level OneBot event category.
+// PostType 标识 OneBot 事件的顶层类别。
 type PostType string
 
 const (
@@ -11,7 +11,7 @@ const (
 	PostTypeMetaEvent   PostType = "meta_event"
 )
 
-// MessageType identifies whether a message came from a private or group chat.
+// MessageType 标识消息来自私聊还是群聊。
 type MessageType string
 
 const (
@@ -19,9 +19,8 @@ const (
 	MessageTypeGroup   MessageType = "group"
 )
 
-// Event contains the common OneBot 11 event envelope and the fields required
-// by Phase 1 message handling. Fields that do not belong to a particular event
-// type remain at their zero value.
+// Event 包含 OneBot 11 事件的公共结构以及 Phase 1 消息处理需要的字段。
+// 不属于当前事件类型的字段保持其零值。
 type Event struct {
 	Time        int64            `json:"time"`
 	SelfID      int64            `json:"self_id"`
@@ -42,8 +41,8 @@ type Event struct {
 	Interval      int64  `json:"interval,omitempty"`
 }
 
-// Sender contains the fields supplied by OneBot for private and group message
-// senders. OneBot implementations may omit fields when they are unavailable.
+// Sender 保存 OneBot 为私聊和群聊消息发送者提供的信息。
+// 某些信息不可用时，OneBot 实现可能省略对应字段。
 type Sender struct {
 	UserID   int64  `json:"user_id,omitempty"`
 	Nickname string `json:"nickname,omitempty"`

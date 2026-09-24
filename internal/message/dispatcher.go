@@ -2,13 +2,13 @@ package message
 
 import "strings"
 
-// Handler processes one exact command supported by the Dispatcher.
+// Handler 处理 Dispatcher 支持的一个精确命令。
 type Handler interface {
 	Command() string
 	Handle(IncomingMessage) OutgoingMessage
 }
 
-// Dispatcher routes supported commands to their handlers.
+// Dispatcher 将支持的命令分发给对应的 Handler。
 type Dispatcher struct {
 	handlers map[string]Handler
 }
@@ -21,8 +21,8 @@ func NewDispatcher(handlers ...Handler) *Dispatcher {
 	return &Dispatcher{handlers: registered}
 }
 
-// Dispatch handles an exact command and returns false when the message should
-// be ignored. Group messages must mention the bot before they can be routed.
+// Dispatch 处理精确匹配的命令；消息应被忽略时返回 false。
+// 群消息必须先 @ 机器人才能进入命令分发流程。
 func (d *Dispatcher) Dispatch(incoming IncomingMessage) (OutgoingMessage, bool) {
 	if incoming.IsGroup && !incoming.Mentioned {
 		return OutgoingMessage{}, false

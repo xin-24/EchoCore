@@ -16,17 +16,15 @@ var (
 	ErrInvalidMessageSegment  = errors.New("invalid OneBot message segment")
 )
 
-// Adapter converts OneBot protocol models to EchoCore's platform-independent
-// message models.
+// Adapter 将 OneBot 协议模型转换为 EchoCore 的平台无关消息模型。
 type Adapter struct{}
 
 func NewAdapter() *Adapter {
 	return &Adapter{}
 }
 
-// ToIncomingMessage converts a OneBot message event into an IncomingMessage.
-// Dispatching, command matching, and self-message filtering belong to later
-// pipeline stages.
+// ToIncomingMessage 将 OneBot 消息事件转换为 IncomingMessage。
+// 消息分发、命令匹配和自身消息过滤由后续处理环节负责。
 func (*Adapter) ToIncomingMessage(event onebotprotocol.Event) (message.IncomingMessage, error) {
 	if event.PostType != onebotprotocol.PostTypeMessage && event.PostType != onebotprotocol.PostTypeMessageSent {
 		return message.IncomingMessage{}, fmt.Errorf("%w: post_type=%q", ErrUnsupportedEvent, event.PostType)

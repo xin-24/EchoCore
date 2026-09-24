@@ -1,6 +1,6 @@
 package onebot
 
-// SegmentType identifies a OneBot message segment.
+// SegmentType 标识 OneBot 消息段的类型。
 type SegmentType string
 
 const (
@@ -8,11 +8,10 @@ const (
 	SegmentTypeAt   SegmentType = "at"
 )
 
-// SegmentData keeps segment-specific fields without constraining extensions
-// provided by NapCat or other OneBot implementations.
+// SegmentData 保存消息段特有的字段，同时允许 NapCat 或其他 OneBot 实现添加扩展字段。
 type SegmentData map[string]any
 
-// MessageSegment is one item in OneBot's array-form message representation.
+// MessageSegment 表示 OneBot 数组格式消息中的一个消息段。
 type MessageSegment struct {
 	Type SegmentType `json:"type"`
 	Data SegmentData `json:"data"`
