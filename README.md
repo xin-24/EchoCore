@@ -15,8 +15,9 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - OneBot 11 协议数据结构：`Event`、`MessageSegment`、`Action`、`ActionResponse`
 - OneBot Event 到平台无关 `IncomingMessage` 的转换
 - 仅支持 `/ping` 与 `/help` 的平台无关 Dispatcher
+- 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
 
-OneBot Action 发送与响应关联将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+OneBot Action 的 `echo` 响应关联将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -67,7 +68,7 @@ EchoCore 终端会为每个事件输出一行结构化 JSON 日志，其中 `eve
 {"level":"INFO","msg":"OneBot event received","component":"onebot.websocket","event":{"post_type":"message","message_type":"private","message":[{"type":"text","data":{"text":"step4-private"}}]}}
 ```
 
-群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。当前 Step 4 只观察并记录事件，不会自动回复 QQ 消息。
+群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。上述 `step4-*` 文本不是已注册命令，因此只会记录事件，不会触发回复。
 
 本地开发默认不校验 Token。如需启用，EchoCore 和 NapCat 必须配置相同值：
 
@@ -106,7 +107,25 @@ Step 7 提供平台无关的 Dispatcher，并注册两个命令 Handler：
 - `/ping`：返回 `pong`。
 - `/help`：返回当前命令帮助。
 
-私聊命令会回复原用户；群聊只有在 `Mentioned=true` 时才会回复原群。未知命令、带额外参数的命令和未 @ 机器人的群消息会被忽略。当前尚未实现 OneBot Action Sender，因此 Dispatcher 的结果还不会发送到 QQ。
+私聊命令会回复原用户；群聊只有在 `Mentioned=true` 时才会回复原群。未知命令、带额外参数的命令和未 @ 机器人的群消息会被忽略。
+
+## OneBot Action Sender
+
+Step 8 将 Dispatcher 生成的 `OutgoingMessage` 转换为 OneBot Action，并通过 NapCat 建立的同一条反向 WebSocket 连接发送：
+
+- 私聊回复使用 `send_private_msg`，目标参数为原消息的 `user_id`。
+- 群聊回复使用 `send_group_msg`，目标参数为原消息的 `group_id`。
+- 回复文本使用 OneBot 数组格式的 `text` message segment。
+- `message_sent` 和发送者为机器人自身的事件会被忽略，避免处理自己的输出。
+
+启动 EchoCore 和 NapCat 后，可使用另一个 QQ 账号进行手动验证：
+
+1. 私聊机器人发送 `/ping`，应收到 `pong`。
+2. 私聊机器人发送 `/help`，应收到命令帮助。
+3. 在机器人所在群发送 `@机器人 /ping`，应在原群收到 `pong`。
+4. 在群里只发送 `/ping` 而不 @ 机器人，不应收到回复。
+
+EchoCore 终端出现 `OneBot reply sent` 表示 Action 已写入 WebSocket。当前步骤只负责发送；NapCat 返回的 Action 响应将在下一步通过 `echo` 进行关联。
 
 ## 健康检查
 

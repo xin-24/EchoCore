@@ -13,6 +13,8 @@ import (
 
 	"github.com/xin-24/EchoCore/internal/adapter/onebot"
 	"github.com/xin-24/EchoCore/internal/config"
+	"github.com/xin-24/EchoCore/internal/handler"
+	"github.com/xin-24/EchoCore/internal/message"
 )
 
 const shutdownTimeout = 5 * time.Second
@@ -68,6 +70,10 @@ func main() {
 
 func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context) http.Handler {
 	mux := http.NewServeMux()
+	dispatcher := message.NewDispatcher(
+		handler.NewPing(),
+		handler.NewHelp(),
+	)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -77,6 +83,7 @@ func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context
 		logger,
 		shutdown,
 		cfg.OneBot.AccessToken,
+		dispatcher,
 	))
 
 	return mux

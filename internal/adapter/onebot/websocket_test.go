@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/xin-24/EchoCore/internal/handler"
+	"github.com/xin-24/EchoCore/internal/message"
 )
 
 func TestWebSocketHandlerAcceptsConnection(t *testing.T) {
@@ -88,6 +90,131 @@ func TestWebSocketHandlerLogsRawOneBotEvents(t *testing.T) {
 	}
 }
 
+func TestWebSocketHandlerSendsCommandReplies(t *testing.T) {
+	tests := []struct {
+		name  string
+		event []byte
+		want  []byte
+	}{
+		{
+			name: "private ping",
+			event: []byte(`{
+				"self_id": 10001000,
+				"post_type": "message",
+				"message_type": "private",
+				"message_id": 101,
+				"user_id": 20002000,
+				"message": [{"type":"text","data":{"text":"/ping"}}]
+			}`),
+			want: []byte(`{
+				"action": "send_private_msg",
+				"params": {
+					"user_id": 20002000,
+					"message": [{"type":"text","data":{"text":"pong"}}]
+				}
+			}`),
+		},
+		{
+			name: "mentioned group help",
+			event: []byte(`{
+				"self_id": 10001000,
+				"post_type": "message",
+				"message_type": "group",
+				"message_id": 102,
+				"user_id": 20002000,
+				"group_id": 30003000,
+				"message": [
+					{"type":"at","data":{"qq":"10001000"}},
+					{"type":"text","data":{"text":" /help"}}
+				]
+			}`),
+			want: []byte(`{
+				"action": "send_group_msg",
+				"params": {
+					"group_id": 30003000,
+					"message": [{"type":"text","data":{"text":"可用命令：\n/ping - 回复 pong\n/help - 显示此帮助"}}]
+				}
+			}`),
+		},
+	}
+
+	server := newTestServer(t, "")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			conn, _, err := websocket.Dial(ctx, websocketURL(server.URL), nil)
+			if err != nil {
+				t.Fatalf("websocket.Dial() error = %v", err)
+			}
+			defer conn.CloseNow()
+
+			if err := conn.Write(ctx, websocket.MessageText, test.event); err != nil {
+				t.Fatalf("conn.Write() error = %v", err)
+			}
+			messageType, payload, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("conn.Read() error = %v", err)
+			}
+			if messageType != websocket.MessageText {
+				t.Fatalf("message type = %v, want %v", messageType, websocket.MessageText)
+			}
+			assertJSONEqual(t, payload, test.want)
+
+			if err := conn.Close(websocket.StatusNormalClosure, "test complete"); err != nil {
+				t.Fatalf("conn.Close() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestHandleEventIgnoresBotMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		event []byte
+	}{
+		{
+			name: "message sent event",
+			event: []byte(`{
+				"self_id": 10001000,
+				"post_type": "message_sent",
+				"message_type": "private",
+				"user_id": 20002000,
+				"message": [{"type":"text","data":{"text":"/ping"}}]
+			}`),
+		},
+		{
+			name: "self-authored message event",
+			event: []byte(`{
+				"self_id": 10001000,
+				"post_type": "message",
+				"message_type": "private",
+				"user_id": 10001000,
+				"message": [{"type":"text","data":{"text":"/ping"}}]
+			}`),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writer := &recordingActionWriter{}
+			dispatcher := message.NewDispatcher(handler.NewPing(), handler.NewHelp())
+			handleEvent(
+				context.Background(),
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				NewAdapter(),
+				dispatcher,
+				NewActionSender(writer),
+				test.event,
+			)
+			if writer.payload != nil {
+				t.Fatalf("self message produced action: %s", writer.payload)
+			}
+		})
+	}
+}
+
 func TestWebSocketHandlerLogsInvalidJSONFrame(t *testing.T) {
 	var logs synchronizedBuffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -144,7 +271,8 @@ func newTestServer(t *testing.T, accessToken string) *httptest.Server {
 
 func newTestServerWithLogger(t *testing.T, logger *slog.Logger, accessToken string) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(NewWebSocketHandler(logger, context.Background(), accessToken))
+	dispatcher := message.NewDispatcher(handler.NewPing(), handler.NewHelp())
+	server := httptest.NewServer(NewWebSocketHandler(logger, context.Background(), accessToken, dispatcher))
 	t.Cleanup(server.Close)
 	return server
 }

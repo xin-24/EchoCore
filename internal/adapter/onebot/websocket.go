@@ -8,28 +8,45 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
+	"github.com/xin-24/EchoCore/internal/message"
+	onebotprotocol "github.com/xin-24/EchoCore/internal/onebot"
 )
 
-const maxMessageSize = 8 << 20
+const (
+	maxMessageSize     = 8 << 20
+	actionWriteTimeout = 5 * time.Second
+)
 
-// WebSocketHandler accepts the OneBot 11 reverse WebSocket connection from
-// NapCat. It records each complete OneBot JSON frame for transport-level
-// diagnostics. Event decoding and dispatching are intentionally handled by
-// later phases.
+type messageDispatcher interface {
+	Dispatch(message.IncomingMessage) (message.OutgoingMessage, bool)
+}
+
+// WebSocketHandler 接收 NapCat 建立的 OneBot 11 反向 WebSocket 连接。
+// 它记录完整的 OneBot JSON 数据帧、分发支持的消息命令，并通过同一连接发送回复。
 type WebSocketHandler struct {
 	logger      *slog.Logger
 	shutdown    context.Context
 	accessToken string
+	adapter     *Adapter
+	dispatcher  messageDispatcher
 	nextID      atomic.Uint64
 }
 
-func NewWebSocketHandler(logger *slog.Logger, shutdown context.Context, accessToken string) *WebSocketHandler {
+func NewWebSocketHandler(
+	logger *slog.Logger,
+	shutdown context.Context,
+	accessToken string,
+	dispatcher messageDispatcher,
+) *WebSocketHandler {
 	return &WebSocketHandler{
 		logger:      logger,
 		shutdown:    shutdown,
 		accessToken: accessToken,
+		adapter:     NewAdapter(),
+		dispatcher:  dispatcher,
 	}
 }
 
@@ -56,6 +73,7 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 	logger.Info("OneBot WebSocket connected")
 	defer logger.Info("OneBot WebSocket disconnected")
+	sender := NewActionSender(conn)
 
 	readCtx, cancelRead := context.WithCancel(r.Context())
 	stopShutdownWatch := context.AfterFunc(h.shutdown, cancelRead)
@@ -81,7 +99,63 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		logFrame(logger, messageType, payload)
+		handleEvent(readCtx, logger, h.adapter, h.dispatcher, sender, payload)
 	}
+}
+
+func handleEvent(
+	ctx context.Context,
+	logger *slog.Logger,
+	adapter *Adapter,
+	dispatcher messageDispatcher,
+	sender *ActionSender,
+	payload []byte,
+) {
+	if !json.Valid(payload) {
+		return
+	}
+
+	var event onebotprotocol.Event
+	if err := json.Unmarshal(payload, &event); err != nil {
+		logger.Warn("OneBot event decoding failed", "error", err)
+		return
+	}
+
+	// Action 响应和非消息事件将在后续阶段处理。
+	// 忽略 message_sent 和机器人自身发送的事件，避免 EchoCore 回复自己的输出。
+	if event.PostType != onebotprotocol.PostTypeMessage {
+		return
+	}
+	if event.SelfID != 0 && event.UserID == event.SelfID {
+		logger.Debug("OneBot self message ignored", "user_id", event.UserID)
+		return
+	}
+
+	incoming, err := adapter.ToIncomingMessage(event)
+	if err != nil {
+		logger.Warn("OneBot message adaptation failed", "error", err)
+		return
+	}
+	outgoing, handled := dispatcher.Dispatch(incoming)
+	if !handled {
+		return
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, actionWriteTimeout)
+	defer cancel()
+	action, err := sender.Send(writeCtx, outgoing)
+	if err != nil {
+		logger.Error("OneBot reply send failed", "error", err)
+		return
+	}
+
+	attributes := []any{"action", action.Action}
+	if outgoing.GroupID != "" {
+		attributes = append(attributes, "group_id", outgoing.GroupID)
+	} else {
+		attributes = append(attributes, "user_id", outgoing.UserID)
+	}
+	logger.Info("OneBot reply sent", attributes...)
 }
 
 func logFrame(logger *slog.Logger, messageType websocket.MessageType, payload []byte) {
