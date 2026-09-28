@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +17,9 @@ import (
 )
 
 const (
-	maxMessageSize     = 8 << 20
-	actionWriteTimeout = 5 * time.Second
+	maxMessageSize              = 8 << 20
+	actionResponseTimeout       = 5 * time.Second
+	maxConcurrentActionRequests = 32
 )
 
 type messageDispatcher interface {
@@ -78,7 +80,13 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	readCtx, cancelRead := context.WithCancel(r.Context())
 	stopShutdownWatch := context.AfterFunc(h.shutdown, cancelRead)
 	defer stopShutdownWatch()
-	defer cancelRead()
+
+	var actionRequests sync.WaitGroup
+	actionSlots := make(chan struct{}, maxConcurrentActionRequests)
+	defer func() {
+		cancelRead()
+		actionRequests.Wait()
+	}()
 
 	for {
 		messageType, payload, err := conn.Read(readCtx)
@@ -99,8 +107,80 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		logFrame(logger, messageType, payload)
-		handleEvent(readCtx, logger, h.adapter, h.dispatcher, sender, payload)
+		if handleActionResponse(logger, sender, payload) {
+			continue
+		}
+		if !isMessageEvent(payload) {
+			continue
+		}
+
+		select {
+		case actionSlots <- struct{}{}:
+			actionRequests.Add(1)
+			go func(payload []byte) {
+				defer actionRequests.Done()
+				defer func() { <-actionSlots }()
+				handleEvent(readCtx, logger, h.adapter, h.dispatcher, sender, payload)
+			}(append([]byte(nil), payload...))
+		default:
+			logger.Warn("OneBot message ignored because action queue is full")
+		}
 	}
+}
+
+func handleActionResponse(logger *slog.Logger, sender *ActionSender, payload []byte) bool {
+	if !json.Valid(payload) {
+		return false
+	}
+
+	var envelope struct {
+		PostType json.RawMessage `json:"post_type"`
+		Status   json.RawMessage `json:"status"`
+		RetCode  json.RawMessage `json:"retcode"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return false
+	}
+	if len(envelope.PostType) != 0 || (len(envelope.Status) == 0 && len(envelope.RetCode) == 0) {
+		return false
+	}
+
+	var response onebotprotocol.ActionResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		logger.Warn("OneBot Action response decoding failed", "error", err)
+		return true
+	}
+	if !sender.Resolve(response) {
+		logger.Warn(
+			"OneBot Action response has no pending request",
+			"echo", string(response.Echo),
+			"status", response.Status,
+			"retcode", response.RetCode,
+		)
+		return true
+	}
+
+	logger.Info(
+		"OneBot Action response matched",
+		"echo", string(response.Echo),
+		"status", response.Status,
+		"retcode", response.RetCode,
+	)
+	return true
+}
+
+func isMessageEvent(payload []byte) bool {
+	if !json.Valid(payload) {
+		return false
+	}
+
+	var envelope struct {
+		PostType onebotprotocol.PostType `json:"post_type"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return false
+	}
+	return envelope.PostType == onebotprotocol.PostTypeMessage
 }
 
 func handleEvent(
@@ -121,7 +201,6 @@ func handleEvent(
 		return
 	}
 
-	// Action 响应和非消息事件将在后续阶段处理。
 	// 忽略 message_sent 和机器人自身发送的事件，避免 EchoCore 回复自己的输出。
 	if event.PostType != onebotprotocol.PostTypeMessage {
 		return
@@ -141,20 +220,25 @@ func handleEvent(
 		return
 	}
 
-	writeCtx, cancel := context.WithTimeout(ctx, actionWriteTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, actionResponseTimeout)
 	defer cancel()
-	action, err := sender.Send(writeCtx, outgoing)
-	if err != nil {
-		logger.Error("OneBot reply send failed", "error", err)
-		return
+	action, response, err := sender.Send(requestCtx, outgoing)
+	attributes := []any{
+		"action", action.Action,
+		"echo", string(action.Echo),
+		"status", response.Status,
+		"retcode", response.RetCode,
 	}
-
-	attributes := []any{"action", action.Action}
 	if outgoing.GroupID != "" {
 		attributes = append(attributes, "group_id", outgoing.GroupID)
 	} else {
 		attributes = append(attributes, "user_id", outgoing.UserID)
 	}
+	if err != nil {
+		logger.Error("OneBot reply send failed", append(attributes, "error", err)...)
+		return
+	}
+
 	logger.Info("OneBot reply sent", attributes...)
 }
 

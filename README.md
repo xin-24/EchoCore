@@ -16,8 +16,9 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - OneBot Event 到平台无关 `IncomingMessage` 的转换
 - 仅支持 `/ping` 与 `/help` 的平台无关 Dispatcher
 - 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
+- 通过 `echo` 一一关联 Action 请求与 `ActionResponse`
 
-OneBot Action 的 `echo` 响应关联将在 Phase 1 的后续步骤中增加。当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+当前不包含 LLM、Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -125,7 +126,26 @@ Step 8 将 Dispatcher 生成的 `OutgoingMessage` 转换为 OneBot Action，并�
 3. 在机器人所在群发送 `@机器人 /ping`，应在原群收到 `pong`。
 4. 在群里只发送 `/ping` 而不 @ 机器人，不应收到回复。
 
-EchoCore 终端出现 `OneBot reply sent` 表示 Action 已写入 WebSocket。当前步骤只负责发送；NapCat 返回的 Action 响应将在下一步通过 `echo` 进行关联。
+EchoCore 终端出现 `OneBot reply sent` 表示 Action 已执行成功并收到 NapCat 响应。
+
+## Echo 请求响应关联
+
+Step 9 为每个 OneBot Action 生成当前 WebSocket 连接内唯一的 `echo`，并在发送前登记等待请求。NapCat 返回 `ActionResponse` 后，EchoCore 根据 `echo` 将响应交给对应请求：
+
+- 支持多个并发 Action 以及乱序返回的响应。
+- 响应状态或返回码表示失败时，发送方会收到明确错误。
+- 请求超过 5 秒未收到响应时自动超时并清理等待记录。
+- WebSocket 断开时取消当前连接上的等待请求。
+- 未知、缺失或已经超时的 `echo` 不会被错误关联。
+
+手动发送 `/ping` 或 `/help` 后，终端应依次出现：
+
+```text
+OneBot Action response matched
+OneBot reply sent
+```
+
+两条日志中的 `echo` 应相同，表示本次请求与响应已成功对应。
 
 ## 健康检查
 

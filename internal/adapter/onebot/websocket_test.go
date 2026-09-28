@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/xin-24/EchoCore/internal/handler"
 	"github.com/xin-24/EchoCore/internal/message"
+	onebotprotocol "github.com/xin-24/EchoCore/internal/onebot"
 )
 
 func TestWebSocketHandlerAcceptsConnection(t *testing.T) {
@@ -111,7 +112,8 @@ func TestWebSocketHandlerSendsCommandReplies(t *testing.T) {
 				"params": {
 					"user_id": 20002000,
 					"message": [{"type":"text","data":{"text":"pong"}}]
-				}
+				},
+				"echo": "echocore-1"
 			}`),
 		},
 		{
@@ -133,7 +135,8 @@ func TestWebSocketHandlerSendsCommandReplies(t *testing.T) {
 				"params": {
 					"group_id": 30003000,
 					"message": [{"type":"text","data":{"text":"可用命令：\n/ping - 回复 pong\n/help - 显示此帮助"}}]
-				}
+				},
+				"echo": "echocore-1"
 			}`),
 		},
 	}
@@ -161,11 +164,50 @@ func TestWebSocketHandlerSendsCommandReplies(t *testing.T) {
 				t.Fatalf("message type = %v, want %v", messageType, websocket.MessageText)
 			}
 			assertJSONEqual(t, payload, test.want)
+			writeSuccessfulActionResponse(t, ctx, conn, payload)
 
 			if err := conn.Close(websocket.StatusNormalClosure, "test complete"); err != nil {
 				t.Fatalf("conn.Close() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestHandleActionResponseMatchesPendingRequest(t *testing.T) {
+	writer := &channelActionWriter{payloads: make(chan []byte, 1)}
+	sender := NewActionSender(writer)
+	result := make(chan error, 1)
+
+	go func() {
+		_, _, err := sender.Send(context.Background(), message.OutgoingMessage{
+			Platform: message.PlatformQQ,
+			UserID:   "20002000",
+			Text:     "pong",
+		})
+		result <- err
+	}()
+
+	payload := <-writer.payloads
+	var action onebotprotocol.Action
+	if err := json.Unmarshal(payload, &action); err != nil {
+		t.Fatalf("json.Unmarshal(action) error = %v", err)
+	}
+	response, err := json.Marshal(onebotprotocol.ActionResponse{
+		Status:  onebotprotocol.ActionStatusOK,
+		RetCode: 0,
+		Data:    json.RawMessage(`{"message_id":88991}`),
+		Echo:    action.Echo,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(response) error = %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if !handleActionResponse(logger, sender, response) {
+		t.Fatal("handleActionResponse() = false, want true")
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("Send() error = %v", err)
 	}
 }
 
@@ -317,6 +359,32 @@ func assertJSONEqual(t *testing.T, got, want []byte) {
 	}
 	if !reflect.DeepEqual(gotValue, wantValue) {
 		t.Fatalf("logged event = %s, want %s", got, want)
+	}
+}
+
+func writeSuccessfulActionResponse(
+	t *testing.T,
+	ctx context.Context,
+	conn *websocket.Conn,
+	actionPayload []byte,
+) {
+	t.Helper()
+
+	var action onebotprotocol.Action
+	if err := json.Unmarshal(actionPayload, &action); err != nil {
+		t.Fatalf("json.Unmarshal(action) error = %v", err)
+	}
+	response, err := json.Marshal(onebotprotocol.ActionResponse{
+		Status:  onebotprotocol.ActionStatusOK,
+		RetCode: 0,
+		Data:    json.RawMessage(`{"message_id":88991}`),
+		Echo:    action.Echo,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(response) error = %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, response); err != nil {
+		t.Fatalf("conn.Write(response) error = %v", err)
 	}
 }
 
