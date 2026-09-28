@@ -9,14 +9,23 @@ import (
 )
 
 const (
-	defaultHost       = "127.0.0.1"
-	defaultPort       = 8080
-	defaultOneBotPath = "/onebot/v11/ws"
+	defaultHost        = "127.0.0.1"
+	defaultPort        = 8080
+	defaultOneBotPath  = "/onebot/v11/ws"
+	defaultEnvironment = EnvironmentDevelopment
+)
+
+type Environment string
+
+const (
+	EnvironmentDevelopment Environment = "development"
+	EnvironmentProduction  Environment = "production"
 )
 
 type Config struct {
-	Server Server
-	OneBot OneBot
+	Environment Environment
+	Server      Server
+	OneBot      OneBot
 }
 
 type Server struct {
@@ -30,6 +39,11 @@ type OneBot struct {
 }
 
 func Load() (Config, error) {
+	environment := Environment(strings.ToLower(envOrDefault("ECHOCORE_ENV", string(defaultEnvironment))))
+	if environment != EnvironmentDevelopment && environment != EnvironmentProduction {
+		return Config{}, fmt.Errorf("ECHOCORE_ENV must be development or production")
+	}
+
 	host := envOrDefault("ECHOCORE_SERVER_HOST", defaultHost)
 	portValue := envOrDefault("ECHOCORE_SERVER_PORT", strconv.Itoa(defaultPort))
 
@@ -44,7 +58,8 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Server: Server{Host: host, Port: port},
+		Environment: environment,
+		Server:      Server{Host: host, Port: port},
 		OneBot: OneBot{
 			Path:        oneBotPath,
 			AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN"),

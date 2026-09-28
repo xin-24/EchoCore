@@ -39,7 +39,7 @@ func TestWebSocketHandlerAcceptsConnection(t *testing.T) {
 	}
 }
 
-func TestWebSocketHandlerLogsRawOneBotEvents(t *testing.T) {
+func TestWebSocketHandlerLogsRawOneBotEventsAtDebug(t *testing.T) {
 	tests := []struct {
 		name  string
 		event string
@@ -59,7 +59,7 @@ func TestWebSocketHandlerLogsRawOneBotEvents(t *testing.T) {
 	}
 
 	var logs synchronizedBuffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	server := newTestServerWithLogger(t, logger, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -88,6 +88,69 @@ func TestWebSocketHandlerLogsRawOneBotEvents(t *testing.T) {
 
 	for index, test := range tests {
 		assertJSONEqual(t, events[index], []byte(test.event))
+	}
+}
+
+func TestLogFrameHidesRawEventAtInfo(t *testing.T) {
+	var logs synchronizedBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	logFrame(logger, websocket.MessageText, []byte(`{"post_type":"message","raw_message":"private"}`))
+
+	if logs.String() != "" {
+		t.Fatalf("INFO logger recorded raw event: %q", logs.String())
+	}
+}
+
+func TestLogFrameRecordsHeartbeatAtDebug(t *testing.T) {
+	var logs synchronizedBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	heartbeat := []byte(`{"post_type":"meta_event","meta_event_type":"heartbeat","interval":30000}`)
+
+	logFrame(logger, websocket.MessageText, heartbeat)
+
+	if !strings.Contains(logs.String(), `"msg":"OneBot heartbeat received"`) {
+		t.Fatalf("heartbeat DEBUG log missing from %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), `"event":{"post_type":"meta_event"`) {
+		t.Fatalf("heartbeat payload missing from %q", logs.String())
+	}
+}
+
+func TestLogIncomingMessageRecordsOnlyKeyFields(t *testing.T) {
+	var logs synchronizedBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	logIncomingMessage(logger, message.IncomingMessage{
+		Platform:  message.PlatformQQ,
+		UserID:    "20002000",
+		GroupID:   "30003000",
+		MessageID: "40004000",
+		Text:      "/ping",
+		IsGroup:   true,
+		Mentioned: true,
+	})
+
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(logs.String())), &entry); err != nil {
+		t.Fatalf("json.Unmarshal(log) error = %v; log: %q", err, logs.String())
+	}
+	if got, want := entry["msg"], "OneBot group message received"; got != want {
+		t.Fatalf("message = %v, want %q", got, want)
+	}
+	for key, want := range map[string]any{
+		"user_id":    "20002000",
+		"group_id":   "30003000",
+		"message_id": "40004000",
+		"message":    "/ping",
+		"mentioned":  true,
+	} {
+		if got := entry[key]; got != want {
+			t.Fatalf("%s = %v, want %v", key, got, want)
+		}
+	}
+	if _, exists := entry["event"]; exists {
+		t.Fatalf("INFO log contains full event: %q", logs.String())
 	}
 }
 
@@ -211,7 +274,7 @@ func TestHandleActionResponseMatchesPendingRequest(t *testing.T) {
 	}
 }
 
-func TestHandleEventIgnoresBotMessages(t *testing.T) {
+func TestHandleEventIgnoresNonTriggeringMessages(t *testing.T) {
 	tests := []struct {
 		name  string
 		event []byte
@@ -233,6 +296,17 @@ func TestHandleEventIgnoresBotMessages(t *testing.T) {
 				"post_type": "message",
 				"message_type": "private",
 				"user_id": 10001000,
+				"message": [{"type":"text","data":{"text":"/ping"}}]
+			}`),
+		},
+		{
+			name: "group command without mention",
+			event: []byte(`{
+				"self_id": 10001000,
+				"post_type": "message",
+				"message_type": "group",
+				"user_id": 20002000,
+				"group_id": 30003000,
 				"message": [{"type":"text","data":{"text":"/ping"}}]
 			}`),
 		},
@@ -336,7 +410,7 @@ func loggedEvents(t *testing.T, logs string) []json.RawMessage {
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			t.Fatalf("json.Unmarshal(log entry) error = %v\nentry: %s", err, scanner.Text())
 		}
-		if entry.Message == "OneBot event received" {
+		if entry.Message == "OneBot raw frame received" {
 			events = append(events, entry.Event)
 		}
 	}

@@ -215,6 +215,7 @@ func handleEvent(
 		logger.Warn("OneBot message adaptation failed", "error", err)
 		return
 	}
+	logIncomingMessage(logger, incoming)
 	outgoing, handled := dispatcher.Dispatch(incoming)
 	if !handled {
 		return
@@ -242,6 +243,24 @@ func handleEvent(
 	logger.Info("OneBot reply sent", attributes...)
 }
 
+func logIncomingMessage(logger *slog.Logger, incoming message.IncomingMessage) {
+	attributes := []any{
+		"user_id", incoming.UserID,
+		"message_id", incoming.MessageID,
+		"message", incoming.Text,
+	}
+	if incoming.IsGroup {
+		attributes = append(attributes,
+			"group_id", incoming.GroupID,
+			"mentioned", incoming.Mentioned,
+		)
+		logger.Info("OneBot group message received", attributes...)
+		return
+	}
+
+	logger.Info("OneBot private message received", attributes...)
+}
+
 func logFrame(logger *slog.Logger, messageType websocket.MessageType, payload []byte) {
 	attributes := []any{
 		"message_type", int(messageType),
@@ -250,7 +269,19 @@ func logFrame(logger *slog.Logger, messageType websocket.MessageType, payload []
 
 	if json.Valid(payload) {
 		attributes = append(attributes, "event", json.RawMessage(payload))
-		logger.Info("OneBot event received", attributes...)
+
+		var envelope struct {
+			PostType      onebotprotocol.PostType `json:"post_type"`
+			MetaEventType string                  `json:"meta_event_type"`
+		}
+		if err := json.Unmarshal(payload, &envelope); err == nil &&
+			envelope.PostType == onebotprotocol.PostTypeMetaEvent &&
+			envelope.MetaEventType == "heartbeat" {
+			logger.Debug("OneBot heartbeat received", attributes...)
+			return
+		}
+
+		logger.Debug("OneBot raw frame received", attributes...)
 		return
 	}
 

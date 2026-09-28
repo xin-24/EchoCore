@@ -3,6 +3,7 @@ package config
 import "testing"
 
 func TestLoadDefaults(t *testing.T) {
+	t.Setenv("ECHOCORE_ENV", "")
 	t.Setenv("ECHOCORE_SERVER_HOST", "")
 	t.Setenv("ECHOCORE_SERVER_PORT", "")
 	t.Setenv("ECHOCORE_ONEBOT_PATH", "")
@@ -15,6 +16,9 @@ func TestLoadDefaults(t *testing.T) {
 	if got, want := cfg.Server.Address(), "127.0.0.1:8080"; got != want {
 		t.Fatalf("address = %q, want %q", got, want)
 	}
+	if got, want := cfg.Environment, EnvironmentDevelopment; got != want {
+		t.Fatalf("environment = %q, want %q", got, want)
+	}
 	if got, want := cfg.OneBot.Path, "/onebot/v11/ws"; got != want {
 		t.Fatalf("OneBot path = %q, want %q", got, want)
 	}
@@ -24,6 +28,7 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
+	t.Setenv("ECHOCORE_ENV", "production")
 	t.Setenv("ECHOCORE_SERVER_HOST", "0.0.0.0")
 	t.Setenv("ECHOCORE_SERVER_PORT", "9090")
 	t.Setenv("ECHOCORE_ONEBOT_PATH", "/custom/ws")
@@ -35,6 +40,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if got, want := cfg.Server.Address(), "0.0.0.0:9090"; got != want {
 		t.Fatalf("address = %q, want %q", got, want)
+	}
+	if got, want := cfg.Environment, EnvironmentProduction; got != want {
+		t.Fatalf("environment = %q, want %q", got, want)
 	}
 	if got, want := cfg.OneBot.Path, "/custom/ws"; got != want {
 		t.Fatalf("OneBot path = %q, want %q", got, want)
@@ -57,5 +65,13 @@ func TestLoadRejectsInvalidOneBotPath(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an invalid OneBot path error")
+	}
+}
+
+func TestLoadRejectsInvalidEnvironment(t *testing.T) {
+	t.Setenv("ECHOCORE_ENV", "staging")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an invalid environment error")
 	}
 }

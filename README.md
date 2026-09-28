@@ -5,13 +5,13 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 ## 当前范围
 
 - Go 工程骨架
-- 结构化 JSON 日志
+- 开发环境彩色 Console 日志、生产环境 JSON 日志
 - 可配置的 HTTP 监听地址
 - `GET /health` 健康检查
 - 优雅停机
 - OneBot 11 反向 WebSocket 接入点：`/onebot/v11/ws`
 - 可选的 OneBot Access Token 校验
-- 原始 OneBot JSON 事件的结构化终端日志
+- DEBUG 级别的原始 OneBot JSON 事件日志
 - OneBot 11 协议数据结构：`Event`、`MessageSegment`、`Action`、`ActionResponse`
 - OneBot Event 到平台无关 `IncomingMessage` 的转换
 - 仅支持 `/ping` 与 `/help` 的平台无关 Dispatcher
@@ -34,6 +34,12 @@ go run ./cmd/server
 
 ```bash
 ECHOCORE_SERVER_HOST=0.0.0.0 ECHOCORE_SERVER_PORT=9090 go run ./cmd/server
+```
+
+默认按开发环境运行，输出包含 DEBUG 的彩色 Console 日志。生产环境使用 JSON 日志：
+
+```bash
+ECHOCORE_ENV=production go run ./cmd/server
 ```
 
 `config.example.yaml` 记录 Phase 1 的目标配置结构；初始化步骤的运行时配置使用上述环境变量。真实 `config.yaml` 已被 Git 忽略。
@@ -63,13 +69,13 @@ ECHOCORE_SERVER_HOST=0.0.0.0 ECHOCORE_SERVER_PORT=9090 go run ./cmd/server
 2. 在机器人所在群发送普通文本 `step4-group`。
 3. 在群内发送 `@机器人 step4-at`。
 
-EchoCore 终端会为每个事件输出一行结构化 JSON 日志，其中 `event` 字段是 NapCat 发来的完整 OneBot JSON。例如：
+开发环境会在 DEBUG 日志中记录 NapCat 发来的完整 OneBot JSON，例如：
 
-```json
-{"level":"INFO","msg":"OneBot event received","component":"onebot.websocket","event":{"post_type":"message","message_type":"private","message":[{"type":"text","data":{"text":"step4-private"}}]}}
+```text
+level=DEBUG msg="OneBot raw frame received" component=onebot.websocket event=...
 ```
 
-群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。上述 `step4-*` 文本不是已注册命令，因此只会记录事件，不会触发回复。
+群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。上述 `step4-*` 文本不是已注册命令，因此只会记录事件，不会触发回复。生产环境的最低日志级别为 INFO，不会输出完整事件和心跳。
 
 本地开发默认不校验 Token。如需启用，EchoCore 和 NapCat 必须配置相同值：
 
@@ -99,7 +105,7 @@ Step 6 由 `internal/adapter/onebot.Adapter` 将 OneBot 消息事件转换为 `i
 - 按顺序拼接 `text` segment，忽略图片等未知 segment。
 - 仅当 `at` segment 指向机器人自身 QQ号时设置 `Mentioned`。
 
-Adapter 只负责模型转换；消息分发和命令处理由下一节的 Dispatcher 负责，自身消息过滤将在后续步骤实现。
+Adapter 只负责模型转换；消息分发和命令处理由 Dispatcher 负责，自身消息过滤由 WebSocket 消息处理层负责。
 
 ## Dispatcher
 
@@ -146,6 +152,35 @@ OneBot reply sent
 ```
 
 两条日志中的 `echo` 应相同，表示本次请求与响应已成功对应。
+
+## 触发规则与日志环境
+
+Step 10 完善消息触发规则和工程日志基础：
+
+- 私聊中的已注册命令可以直接触发。
+- 群聊必须包含指向机器人自身 QQ 的 `at` 消息段，否则不触发。
+- `message_sent` 事件以及 `user_id` 等于 `self_id` 的消息会被忽略，避免机器人处理自己的输出。
+- INFO 只记录消息类型、用户、群、消息 ID、是否 @、文本、Action 状态等关键字段。
+- 心跳和完整 OneBot 帧只写入 DEBUG。
+
+日志模式由 `ECHOCORE_ENV` 控制：
+
+| 环境 | 日志格式 | 最低级别 | 用途 |
+| --- | --- | --- | --- |
+| `development`（默认） | 彩色 Console | DEBUG | 本地开发和协议排查 |
+| `production` | JSON | INFO | 生产采集和日志检索 |
+
+开发环境启动：
+
+```bash
+go run ./cmd/server
+```
+
+生产环境启动：
+
+```bash
+ECHOCORE_ENV=production go run ./cmd/server
+```
 
 ## 健康检查
 

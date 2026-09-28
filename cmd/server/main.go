@@ -14,19 +14,19 @@ import (
 	"github.com/xin-24/EchoCore/internal/adapter/onebot"
 	"github.com/xin-24/EchoCore/internal/config"
 	"github.com/xin-24/EchoCore/internal/handler"
+	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/message"
 )
 
 const shutdownTimeout = 5 * time.Second
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("configuration error", "error", err)
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("configuration error", "error", err)
 		os.Exit(1)
 	}
+	logger := logging.New(os.Stdout, cfg.Environment)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -42,7 +42,7 @@ func main() {
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		logger.Info("EchoCore starting")
+		logger.Info("EchoCore starting", "environment", cfg.Environment)
 		logger.Info("HTTP server listening", "address", server.Addr)
 		serverErrors <- server.ListenAndServe()
 	}()
