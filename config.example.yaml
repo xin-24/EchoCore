@@ -10,3 +10,7 @@ onebot:
 
 bot:
   command_prefix: "/"
+
+# 此文件用于说明配置结构，运行时通过 ECHOCORE_GROUP_CONTROL_USER_IDS 读取白名单。
+group:
+  control_user_ids: []

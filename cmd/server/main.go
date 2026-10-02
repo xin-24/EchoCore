@@ -13,6 +13,7 @@ import (
 
 	"github.com/xin-24/EchoCore/internal/adapter/onebot"
 	"github.com/xin-24/EchoCore/internal/config"
+	"github.com/xin-24/EchoCore/internal/group"
 	"github.com/xin-24/EchoCore/internal/handler"
 	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/message"
@@ -70,9 +71,13 @@ func main() {
 
 func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context) http.Handler {
 	mux := http.NewServeMux()
+	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
+	groupStates := group.NewStateStore()
+	groupPermissions := group.NewAllowlist(cfg.Group.ControlUserIDs)
 	dispatcher := message.NewDispatcher(
 		handler.NewPing(),
 		handler.NewHelp(),
+		handler.NewAI(groupStates, groupPermissions),
 	)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

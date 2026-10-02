@@ -197,7 +197,7 @@ func TestWebSocketHandlerSendsCommandReplies(t *testing.T) {
 				"action": "send_group_msg",
 				"params": {
 					"group_id": 30003000,
-					"message": [{"type":"text","data":{"text":"可用命令：\n/ping - 回复 pong\n/help - 显示此帮助"}}]
+					"message": [{"type":"text","data":{"text":"可用命令：\n/ping - 回复 pong\n/help - 显示此帮助\n/ai on - 开启本群 AI 参与开关（仅白名单）\n/ai off - 关闭本群 AI 参与开关（仅白名单）\n群命令需要 @机器人；AI 开关默认关闭，服务重启后关闭。"}}]
 				},
 				"echo": "echocore-1"
 			}`),
@@ -274,7 +274,7 @@ func TestHandleActionResponseMatchesPendingRequest(t *testing.T) {
 	}
 }
 
-func TestHandleEventIgnoresNonTriggeringMessages(t *testing.T) {
+func TestDispatchEventIgnoresNonTriggeringMessages(t *testing.T) {
 	tests := []struct {
 		name  string
 		event []byte
@@ -314,18 +314,15 @@ func TestHandleEventIgnoresNonTriggeringMessages(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			writer := &recordingActionWriter{}
 			dispatcher := message.NewDispatcher(handler.NewPing(), handler.NewHelp())
-			handleEvent(
-				context.Background(),
+			outgoing, handled := dispatchEvent(
 				slog.New(slog.NewTextHandler(io.Discard, nil)),
 				NewAdapter(),
 				dispatcher,
-				NewActionSender(writer),
 				test.event,
 			)
-			if writer.payload != nil {
-				t.Fatalf("self message produced action: %s", writer.payload)
+			if handled || outgoing != (message.OutgoingMessage{}) {
+				t.Fatalf("ignored message produced reply: %#v, handled=%v", outgoing, handled)
 			}
 		})
 	}

@@ -1,6 +1,6 @@
 # EchoCore
 
-EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当前仓库处于 Phase 1：已经完成基础 HTTP 服务，并开始接入 NapCat 与 OneBot 11。
+EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当前已跑通 Phase 1 的 QQ 双向消息链路，开始实现 Phase 2 的群聊 AI 参与控制。
 
 ## 当前范围
 
@@ -14,7 +14,8 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - DEBUG 级别的原始 OneBot JSON 事件日志
 - OneBot 11 协议数据结构：`Event`、`MessageSegment`、`Action`、`ActionResponse`
 - OneBot Event 到平台无关 `IncomingMessage` 的转换
-- 仅支持 `/ping` 与 `/help` 的平台无关 Dispatcher
+- 支持 `/ping`、`/help` 与带参数 `/ai on/off` 的平台无关 Dispatcher
+- 白名单用户按群启停 AI 参与开关，群状态仅在内存中保存
 - 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
 - 通过 `echo` 一一关联 Action 请求与 `ActionResponse`
 
@@ -114,7 +115,27 @@ Step 7 提供平台无关的 Dispatcher，并注册两个命令 Handler：
 - `/ping`：返回 `pong`。
 - `/help`：返回当前命令帮助。
 
-私聊命令会回复原用户；群聊只有在 `Mentioned=true` 时才会回复原群。未知命令、带额外参数的命令和未 @ 机器人的群消息会被忽略。
+私聊命令会回复原用户；群聊只有在 `Mentioned=true` 时才会回复原群。未知命令、`/ping` 或 `/help` 的额外参数和未 @ 机器人的群消息会被忽略。Phase 2 增加了显式支持参数的 `/ai` Handler。
+
+## 群 AI 参与开关
+
+Phase 2 Step 2 实现 `/ai on` 与 `/ai off`，仅控制当前群的开关。当前尚未接入模型，开启后普通群消息仍不会得到 AI 回复；选择性回复会在后续 Router Agent 和 LLM 步骤实现。
+
+使用逗号分隔的 QQ 号配置授权用户，然后重新启动 Go 服务（将示例 QQ 号替换为实际操作者的 QQ 号）：
+
+```bash
+ECHOCORE_GROUP_CONTROL_USER_IDS="20001,20002" go run ./cmd/server
+```
+
+白名单通过消息发送者 QQ 号校验，与 QQ 群管理员身份无关。未设置或留空时，任何人都不能修改开关；非法 QQ 号或空列表项会导致启动报配置错误。当前运行时仍只读取环境变量。
+
+- 群内发送 `@机器人 /ai on`：开启当前群，回复“本群 AI 参与开关已开启。”
+- 群内发送 `@机器人 /ai off`：关闭当前群，回复“本群 AI 参与开关已关闭。”
+- 重复操作会提示“已经开启”或“已经关闭”，不会产生额外状态变化。
+- 非白名单用户操作会收到权限提示；私聊使用 `/ai` 会收到群聊用法提示。
+- 每个群独立，默认关闭；NapCat 重连不会清空状态，Go 进程重启后所有群恢复关闭。
+
+手动验收：白名单账号在群 A 开启，再次开启应提示“已经开启”；在群 B 首次关闭应提示“已经关闭”。用非白名单账号在群 A 关闭，应被拒绝；白名单账号再次开启群 A，应仍提示“已经开启”。保持群 A 开启后重启 Go，再在群 A 关闭，应提示“已经关闭”。最后测试 `/ping`、`/help`，确认原有回复可用。所有群命令都需要真实 @ 机器人。
 
 ## OneBot Action Sender
 

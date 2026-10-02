@@ -113,17 +113,23 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !isMessageEvent(payload) {
 			continue
 		}
+		// 命令按当前连接的接收顺序分发，避免相邻的 on/off 因协程调度而颠倒。
+		// 网络回复仍异步等待，读循环可以继续接收 ActionResponse。
+		outgoing, handled := dispatchEvent(logger, h.adapter, h.dispatcher, payload)
+		if !handled {
+			continue
+		}
 
 		select {
 		case actionSlots <- struct{}{}:
 			actionRequests.Add(1)
-			go func(payload []byte) {
+			go func(outgoing message.OutgoingMessage) {
 				defer actionRequests.Done()
 				defer func() { <-actionSlots }()
-				handleEvent(readCtx, logger, h.adapter, h.dispatcher, sender, payload)
-			}(append([]byte(nil), payload...))
+				sendReply(readCtx, logger, sender, outgoing)
+			}(outgoing)
 		default:
-			logger.Warn("OneBot message ignored because action queue is full")
+			logger.Warn("OneBot reply skipped because action queue is full")
 		}
 	}
 }
@@ -183,44 +189,41 @@ func isMessageEvent(payload []byte) bool {
 	return envelope.PostType == onebotprotocol.PostTypeMessage
 }
 
-func handleEvent(
-	ctx context.Context,
+func dispatchEvent(
 	logger *slog.Logger,
 	adapter *Adapter,
 	dispatcher messageDispatcher,
-	sender *ActionSender,
 	payload []byte,
-) {
+) (message.OutgoingMessage, bool) {
 	if !json.Valid(payload) {
-		return
+		return message.OutgoingMessage{}, false
 	}
 
 	var event onebotprotocol.Event
 	if err := json.Unmarshal(payload, &event); err != nil {
 		logger.Warn("OneBot event decoding failed", "error", err)
-		return
+		return message.OutgoingMessage{}, false
 	}
 
 	// 忽略 message_sent 和机器人自身发送的事件，避免 EchoCore 回复自己的输出。
 	if event.PostType != onebotprotocol.PostTypeMessage {
-		return
+		return message.OutgoingMessage{}, false
 	}
 	if event.SelfID != 0 && event.UserID == event.SelfID {
 		logger.Debug("OneBot self message ignored", "user_id", event.UserID)
-		return
+		return message.OutgoingMessage{}, false
 	}
 
 	incoming, err := adapter.ToIncomingMessage(event)
 	if err != nil {
 		logger.Warn("OneBot message adaptation failed", "error", err)
-		return
+		return message.OutgoingMessage{}, false
 	}
 	logIncomingMessage(logger, incoming)
-	outgoing, handled := dispatcher.Dispatch(incoming)
-	if !handled {
-		return
-	}
+	return dispatcher.Dispatch(incoming)
+}
 
+func sendReply(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage) {
 	requestCtx, cancel := context.WithTimeout(ctx, actionResponseTimeout)
 	defer cancel()
 	action, response, err := sender.Send(requestCtx, outgoing)

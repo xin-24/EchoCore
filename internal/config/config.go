@@ -26,6 +26,11 @@ type Config struct {
 	Environment Environment
 	Server      Server
 	OneBot      OneBot
+	Group       Group
+}
+
+type Group struct {
+	ControlUserIDs []string
 }
 
 type Server struct {
@@ -57,6 +62,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("ECHOCORE_ONEBOT_PATH must be an absolute URL path without a query or fragment")
 	}
 
+	controlUserIDs, err := parseControlUserIDs(os.Getenv("ECHOCORE_GROUP_CONTROL_USER_IDS"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		Environment: environment,
 		Server:      Server{Host: host, Port: port},
@@ -64,7 +74,29 @@ func Load() (Config, error) {
 			Path:        oneBotPath,
 			AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN"),
 		},
+		Group: Group{ControlUserIDs: controlUserIDs},
 	}, nil
+}
+
+// parseControlUserIDs 校验并去重逗号分隔的 QQ 号；未配置时默认拒绝所有启停操作。
+func parseControlUserIDs(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var ids []string
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(value, ",") {
+		id := strings.TrimSpace(item)
+		number, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || number <= 0 || strconv.FormatInt(number, 10) != id {
+			return nil, fmt.Errorf("ECHOCORE_GROUP_CONTROL_USER_IDS must contain comma-separated positive QQ IDs without leading zeros")
+		}
+		if _, exists := seen[id]; !exists {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (s Server) Address() string {
