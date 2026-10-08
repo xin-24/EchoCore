@@ -19,7 +19,7 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
 - 通过 `echo` 一一关联 Action 请求与 `ActionResponse`
 
-当前不包含 LLM、Agent、Memory、RAG 或管理后台。
+已包含规则型 Router Agent；当前不包含 LLM、Executor Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -119,7 +119,7 @@ Step 7 提供平台无关的 Dispatcher，并注册两个命令 Handler：
 
 ## 群 AI 参与开关
 
-Phase 2 Step 2 实现 `/ai on` 与 `/ai off`，仅控制当前群的开关。当前尚未接入模型，开启后普通群消息仍不会得到 AI 回复；选择性回复会在后续 Router Agent 和 LLM 步骤实现。
+Phase 2 Step 2 实现 `/ai on` 与 `/ai off`，仅控制当前群的开关。Step 3 已接入规则型 Router Agent；当前尚未接入模型，开启后普通群消息进入候选，但仍不会得到 AI 回复。相关性判断与生成回复会在后续 LLM 和 Executor 步骤实现。
 
 使用逗号分隔的 QQ 号配置授权用户，然后重新启动 Go 服务（将示例 QQ 号替换为实际操作者的 QQ 号）：
 
@@ -136,6 +136,26 @@ ECHOCORE_GROUP_CONTROL_USER_IDS="20001,20002" go run ./cmd/server
 - 每个群独立，默认关闭；NapCat 重连不会清空状态，Go 进程重启后所有群恢复关闭。
 
 手动验收：白名单账号在群 A 开启，再次开启应提示“已经开启”；在群 B 首次关闭应提示“已经关闭”。用非白名单账号在群 A 关闭，应被拒绝；白名单账号再次开启群 A，应仍提示“已经开启”。保持群 A 开启后重启 Go，再在群 A 关闭，应提示“已经关闭”。最后测试 `/ping`、`/help`，确认原有回复可用。所有群命令都需要真实 @ 机器人。
+
+## Router Agent 与 AI 候选
+
+Phase 2 Step 3 在 OneBot Adapter 和 Dispatcher 之间加入 `internal/agent.Router`，返回 `ignore`、`command` 或 `ai_candidate`。路由本身不调用模型、不改变群状态；命令由原 Dispatcher 执行。
+
+- 开启群：任何成员的非空普通文本都可进入候选，不要求 @ 或 `/ask`；是否值得回复留给后续 Decide 判断。
+- 关闭群：普通文本与直接 @ 都不会进入 AI 候选；`@机器人 /ai on`、`/ai off`、`/ping`、`/help` 仍可处理。
+- 群命令继续要求真实 @；未知 `/` 命令、空文本、纯图片等无文本消息及自身消息不会进入候选。已知命令参数错误也不会回落到 AI。
+- 私聊仅 `/ask 问题` 进入 AI 候选，并去掉命令前缀；普通私聊与空 `/ask` 忽略。本步仍不生成回复。
+- 候选和命令在 INFO 输出 `Router message routed`，仅带路由、原因与标识字段；忽略原因在 DEBUG 输出。完整事件继续只在 DEBUG 输出。
+
+手动验收（先重启 Go 服务加载新代码）：
+
+1. 白名单用户在群 A 发送 `@机器人 /ai on`。
+2. 任意成员在群 A 发普通文本，终端应出现 `route=ai_candidate`、`reason=group_enabled`，QQ 不会收到 AI 回复。
+3. 在未开启的群 B 发相同文本，不应出现该消息的 `ai_candidate` 路由日志。
+4. 在群 A 发送 `@机器人 /ai off`，再发普通文本或直接 @，均不应出现候选日志。原始收消息 INFO 日志仍会出现，这不表示触发了 AI。
+5. 群聊 `@机器人 /ping` 和 `/help` 仍正常回复；私聊 `/ask 你好` 仅出现 `reason=private_ask` 的候选日志。
+
+冷却、模型判断、Executor 及关闭时取消在途生成尚未实现，将在后续步骤接入；当前没有模型任务或延迟 AI 回复。
 
 ## OneBot Action Sender
 

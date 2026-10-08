@@ -27,6 +27,12 @@ func NewDispatcher(handlers ...Handler) *Dispatcher {
 	return &Dispatcher{handlers: registered}
 }
 
+// SupportsCommand 检查命令名称是否注册，不执行 Handler 或修改群状态。
+func (d *Dispatcher) SupportsCommand(command string) bool {
+	_, ok := d.handlers[command]
+	return ok
+}
+
 // Dispatch 分发命令，仅向 ArgumentHandler 传递参数；消息应被忽略时返回 false。
 // 群消息必须先 @ 机器人才能进入命令分发流程。
 func (d *Dispatcher) Dispatch(incoming IncomingMessage) (OutgoingMessage, bool) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xin-24/EchoCore/internal/adapter/onebot"
+	"github.com/xin-24/EchoCore/internal/agent"
 	"github.com/xin-24/EchoCore/internal/config"
 	"github.com/xin-24/EchoCore/internal/group"
 	"github.com/xin-24/EchoCore/internal/handler"
@@ -88,7 +89,7 @@ func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context
 		logger,
 		shutdown,
 		cfg.OneBot.AccessToken,
-		dispatcher,
+		agent.NewRouter(groupStates, dispatcher, logger),
 	))
 
 	return mux
