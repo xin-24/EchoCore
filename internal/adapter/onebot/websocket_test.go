@@ -142,7 +142,7 @@ func TestLogIncomingMessageRecordsOnlyKeyFields(t *testing.T) {
 		"user_id":    "20002000",
 		"group_id":   "30003000",
 		"message_id": "40004000",
-		"message":    "/ping",
+		"text_chars": float64(5),
 		"mentioned":  true,
 	} {
 		if got := entry[key]; got != want {
@@ -151,6 +151,9 @@ func TestLogIncomingMessageRecordsOnlyKeyFields(t *testing.T) {
 	}
 	if _, exists := entry["event"]; exists {
 		t.Fatalf("INFO log contains full event: %q", logs.String())
+	}
+	if _, exists := entry["message"]; exists {
+		t.Fatal("INFO 不应记录对话正文")
 	}
 }
 

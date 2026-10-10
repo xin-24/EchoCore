@@ -19,7 +19,7 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
 - 通过 `echo` 一一关联 Action 请求与 `ActionResponse`
 
-已包含规则型 Router Agent、LLM 接口与离线 FakeLLM；当前不包含真实模型 Provider、Executor Agent、Memory、RAG 或管理后台。
+已包含 Router Agent、Executor Agent、LLM 接口、离线 FakeLLM、OpenAI 兼容 API 与 Ollama Provider。模型默认关闭，可通过配置启用其中一种；当前不包含聊天历史管理、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -43,7 +43,7 @@ ECHOCORE_SERVER_HOST=0.0.0.0 ECHOCORE_SERVER_PORT=9090 go run ./cmd/server
 ECHOCORE_ENV=production go run ./cmd/server
 ```
 
-`config.example.yaml` 记录 Phase 1 的目标配置结构；初始化步骤的运行时配置使用上述环境变量。真实 `config.yaml` 已被 Git 忽略。
+`config.example.yaml` 仅说明配置结构，不自动加载；运行时使用环境变量。真实 `config.yaml` 已被 Git 忽略。
 
 ## NapCat 反向 WebSocket
 
@@ -76,7 +76,7 @@ ECHOCORE_ENV=production go run ./cmd/server
 level=DEBUG msg="OneBot raw frame received" component=onebot.websocket event=...
 ```
 
-群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。上述 `step4-*` 文本不是已注册命令，因此只会记录事件，不会触发回复。生产环境的最低日志级别为 INFO，不会输出完整事件和心跳。
+群聊事件的 `message_type` 为 `group`；@ 消息的 `message` 数组中会同时出现 `at` 和 `text` segment。默认未启用模型时，上述 `step4-*` 文本只会记录事件，不会触发回复；已启用模型且开启群后，普通群文本可能触发 AI。生产环境的最低日志级别为 INFO，不会输出完整事件和心跳。
 
 本地开发默认不校验 Token。如需启用，EchoCore 和 NapCat 必须配置相同值：
 
@@ -115,11 +115,11 @@ Step 7 提供平台无关的 Dispatcher，并注册两个命令 Handler：
 - `/ping`：返回 `pong`。
 - `/help`：返回当前命令帮助。
 
-私聊命令会回复原用户；群聊只有在 `Mentioned=true` 时才会回复原群。未知命令、`/ping` 或 `/help` 的额外参数和未 @ 机器人的群消息会被忽略。Phase 2 增加了显式支持参数的 `/ai` Handler。
+私聊命令会回复原用户；群聊确定性命令只有在 `Mentioned=true` 时才会回复原群。未知命令、`/ping` 或 `/help` 的额外参数和未 @ 的群命令会被忽略。Phase 2 增加了带参数的 `/ai` Handler，并为开启群的普通消息建立独立 AI 路径。
 
 ## 群 AI 参与开关
 
-Phase 2 Step 2 实现 `/ai on` 与 `/ai off`，仅控制当前群的开关。Step 3 已接入规则型 Router Agent；当前尚未接入模型，开启后普通群消息进入候选，但仍不会得到 AI 回复。相关性判断与生成回复会在后续 LLM 和 Executor 步骤实现。
+Phase 2 Step 2 实现 `/ai on` 与 `/ai off`，仅控制当前群的开关。Step 3 加入 Router，Step 5 加入 Executor 与可切换 Provider：配置好模型后，开启群的普通消息可经判断获得 AI 回复。默认 `disabled` 时，开关仍有效，但不调用模型。
 
 使用逗号分隔的 QQ 号配置授权用户，然后重新启动 Go 服务（将示例 QQ 号替换为实际操作者的 QQ 号）：
 
@@ -141,13 +141,13 @@ ECHOCORE_GROUP_CONTROL_USER_IDS="20001,20002" go run ./cmd/server
 
 Phase 2 Step 3 在 OneBot Adapter 和 Dispatcher 之间加入 `internal/agent.Router`，返回 `ignore`、`command` 或 `ai_candidate`。路由本身不调用模型、不改变群状态；命令由原 Dispatcher 执行。
 
-- 开启群：任何成员的非空普通文本都可进入候选，不要求 @ 或 `/ask`；是否值得回复留给后续 Decide 判断。
+- 开启群：任何成员的非空普通文本都可进入候选，不要求 @ 或 `/ask`；启用模型时经 Decide 判断是否值得回复。直接 @ 的问题优先生成，不调用 Decide。
 - 关闭群：普通文本与直接 @ 都不会进入 AI 候选；`@机器人 /ai on`、`/ai off`、`/ping`、`/help` 仍可处理。
 - 群命令继续要求真实 @；未知 `/` 命令、空文本、纯图片等无文本消息及自身消息不会进入候选。已知命令参数错误也不会回落到 AI。
-- 私聊仅 `/ask 问题` 进入 AI 候选，并去掉命令前缀；普通私聊与空 `/ask` 忽略。本步仍不生成回复。
+- 私聊仅 `/ask 问题` 进入 AI 候选，并去掉命令前缀；普通私聊与空 `/ask` 忽略。启用模型时直接生成回答。
 - 候选和命令在 INFO 输出 `Router message routed`，仅带路由、原因与标识字段；忽略原因在 DEBUG 输出。完整事件继续只在 DEBUG 输出。
 
-手动验收（先重启 Go 服务加载新代码）：
+仅验收候选路由（使用默认 `ECHOCORE_LLM_PROVIDER=disabled`，先重启 Go）：
 
 1. 白名单用户在群 A 发送 `@机器人 /ai on`。
 2. 任意成员在群 A 发普通文本，终端应出现 `route=ai_candidate`、`reason=group_enabled`，QQ 不会收到 AI 回复。
@@ -155,7 +155,7 @@ Phase 2 Step 3 在 OneBot Adapter 和 Dispatcher 之间加入 `internal/agent.Ro
 4. 在群 A 发送 `@机器人 /ai off`，再发普通文本或直接 @，均不应出现候选日志。原始收消息 INFO 日志仍会出现，这不表示触发了 AI。
 5. 群聊 `@机器人 /ping` 和 `/help` 仍正常回复；私聊 `/ask 你好` 仅出现 `reason=private_ask` 的候选日志。
 
-冷却、模型判断、Executor 及关闭时取消在途生成尚未实现，将在后续步骤接入；当前没有模型任务或延迟 AI 回复。
+模型启用后的验收见下面的 Step 5；冷却与更精细的频率控制仍留待 Step 6。
 
 ## LLM 接口与离线 FakeLLM
 
@@ -166,7 +166,7 @@ Phase 2 Step 4 新增 `internal/llm`，不依赖具体服务商 SDK，也不依�
 - `Client`：组合上述两个接口；调用方只有在判断成功且明确为 `reply` 时才继续生成。
 - `FakeLLM`：显式配置固定判断与固定文本，默认忽略；支持分别注入判断/生成错误与延迟，响应 context 取消及超时，并记录并发安全的调用次数。
 
-FakeLLM 不理解语义、不模拟 token 截断、不保存聊天历史、不读取密钥、不请求网络。空文本、超长回复等可作为测试数据；真正的输出校验由后续 Executor 负责。历史的群隔离与裁剪由调用方负责。
+FakeLLM 不理解语义、不模拟 token 截断、不保存聊天历史、不读取密钥、不请求网络。空文本、超长回复等可作为测试数据；真正的输出校验由 Executor 负责。历史的群隔离与裁剪由调用方负责，当前 Executor 不收集或传递历史。
 
 离线验收（已安装 Go 且项目依赖已准备好时，无需外网）：
 
@@ -176,7 +176,61 @@ GOPROXY=off GOSUMDB=off go test -count=1 -v ./internal/llm ./internal/agent
 
 测试覆盖“回复 / 忽略”、固定文本、默认忽略、错误透传、取消、超时、并发调用及结果隔离；Router 组合测试验证关闭群和确定性命令不会调用模型，忽略结果不会继续生成。
 
-本步只提供接口与离线测试组件，**服务启动路径未装配 FakeLLM**，生产环境也无法通过配置启用它。QQ 的候选消息仍只记录日志，不会收到固定回复；异步模型执行、发送前群状态复核及真实 Provider 留到 Step 5 实现。
+**服务启动路径未装配 FakeLLM**，生产环境也无法通过配置启用它。FakeLLM 仅在自动测试中显式注入；启用真实模型请使用以下配置。
+
+## Executor 与可切换 Provider
+
+Phase 2 Step 5 支持 `disabled`、`openai-compatible`、`ollama`。每次启动只选择一种，后续换服务或模型只需修改环境变量并重启，不自动回退或同时调用两家服务。
+
+### 云端兼容 API
+
+```bash
+export ECHOCORE_LLM_PROVIDER=openai-compatible
+export ECHOCORE_LLM_BASE_URL=https://api.openai.com/v1
+export ECHOCORE_LLM_MODEL='填写服务商支持的模型名'
+export ECHOCORE_GROUP_CONTROL_USER_IDS='填写你的QQ号'
+# 在本地安全地设置 ECHOCORE_LLM_API_KEY，不要把真实密钥提交到 Git 或发到聊天。
+go run ./cmd/server
+```
+
+兼容 Provider 使用非流式 Chat Completions，Base URL 应是 API 根地址，程序追加 `/chat/completions`。默认输出限制字段是 `max_completion_tokens`；第三方只支持旧字段时设置 `ECHOCORE_LLM_TOKEN_FIELD=max_tokens`。兼容服务的参数支持各异，不保证所有模型可直接使用。接口实现参照 [OpenAI Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。不使用 Responses API，也不绑定具体模型或 SDK。
+
+### 本地 Ollama
+
+先自行启动 Ollama 并准备模型，然后在启动 EchoCore 的终端配置：
+
+```bash
+export ECHOCORE_LLM_PROVIDER=ollama
+export ECHOCORE_LLM_BASE_URL=http://127.0.0.1:11434
+export ECHOCORE_LLM_MODEL='填写本机已安装的模型名'
+export ECHOCORE_GROUP_CONTROL_USER_IDS='填写你的QQ号'
+unset ECHOCORE_LLM_API_KEY
+go run ./cmd/server
+```
+
+Ollama Provider 使用原生非流式 `/api/chat`，不要在 Base URL 中重复写 `/api/chat`。接口实现参照 [Ollama 官方文档](https://docs.ollama.com/api/chat)。本机服务通常不需要密钥；若使用受保护的远端部署，可显式配置 `ECHOCORE_LLM_API_KEY`。远端 URL 要求 HTTPS，仅回环地址允许 HTTP；禁止重定向，防止消息或密钥被发送到意外地址。
+
+### 运行边界与保护
+
+- 未配置 Provider 时默认关闭，不发送模型请求；`/ping`、`/help`、群开关保持可用。
+- 普通群消息先 Decide，只有严格返回 `reply` 才 Generate；无效判断保守忽略。私聊 `/ask` 与开启群中的真实 @ 直接 Generate。
+- 判断与生成在独立协程运行，共用 `ECHOCORE_LLM_TIMEOUT`（默认 `30s`，最大 `2m`）；生成完成后才开始 OneBot 的 5 秒 Action 等待。
+- 服务级 `ECHOCORE_LLM_MAX_CONCURRENT` 默认 4，同群只允许一个在途模型任务，不无限排队；满载时普通消息静默跳过，显式提问收到繁忙提示。
+- 关闭群会取消该次开启周期的任务，发送器在写入前复核周期。关闭再开启不会恢复旧回复；已写入 NapCat 的消息无法撤回。连接断开或服务退出也会取消模型任务。
+- `ECHOCORE_LLM_MAX_INPUT_CHARS` 默认 4000，超长输入不调用模型；`ECHOCORE_LLM_MAX_OUTPUT_TOKENS` 默认 512；`ECHOCORE_LLM_MAX_REPLY_CHARS` 默认 2000，超过字符上限的回复会截断。
+- 空回复、超时和服务错误不会把内部错误发到 QQ；显式提问得到通用失败提示，普通群消息保持沉默。INFO 不记录对话正文、密钥或服务端错误正文；开发 DEBUG 仍可能包含完整 QQ 事件，请勿公开日志。
+- **当前没有多轮历史与回复冷却**。普通群候选可能各消耗一次判断请求，肯定判断再消耗一次生成请求；先在小测试群验证费用和体验，不要直接在高流量群启用。
+
+### 手动验收真实模型
+
+1. 配置一种实际可用的 Provider 并重启 Go，确认日志显示所选 Provider，NapCat 已连接。
+2. 私聊 `/ask 用一句话介绍你自己`，应得到模型回答。
+3. 白名单用户在群 A 发送 `@机器人 /ai on`，再 `@机器人 用一句话解释什么是反向 WebSocket`，应在原群收到回答。
+4. 不 @ 发送普通问题，应由模型决定是否回复；“哈哈”等无明确问题的文本应倾向忽略，但语义判断不是确定性规则。
+5. 群 B 未开启，即使 @ 也不触发 AI；两群 `/ping`、`/help` 的原规则保持不变。
+6. 群 A 发起较慢的生成时发送 `/ai off`（需要 @），不应补发未发送的旧答案；再开启也不应恢复旧任务。
+
+自动测试用本地 HTTP 模拟服务覆盖两种真实 Provider 的请求格式、判断/生成、错误与取消，并通过 WebSocket 验证回复链路；这不等同于付费云模型或本机 Ollama 的真实端到端验收。当前环境未提供模型服务与凭证，仍需完成以上手动步骤。
 
 ## OneBot Action Sender
 
@@ -222,7 +276,7 @@ Step 10 完善消息触发规则和工程日志基础：
 - 私聊中的已注册命令可以直接触发。
 - 群聊必须包含指向机器人自身 QQ 的 `at` 消息段，否则不触发。
 - `message_sent` 事件以及 `user_id` 等于 `self_id` 的消息会被忽略，避免机器人处理自己的输出。
-- INFO 只记录消息类型、用户、群、消息 ID、是否 @、文本、Action 状态等关键字段。
+- INFO 只记录消息类型、用户、群、消息 ID、是否 @、文本字符数、Action 状态等关键字段；对话正文仅在 DEBUG 事件日志中出现。
 - 心跳和完整 OneBot 帧只写入 DEBUG。
 
 日志模式由 `ECHOCORE_ENV` 控制：

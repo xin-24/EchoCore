@@ -16,6 +16,7 @@ import (
 	"github.com/xin-24/EchoCore/internal/config"
 	"github.com/xin-24/EchoCore/internal/group"
 	"github.com/xin-24/EchoCore/internal/handler"
+	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/message"
 )
@@ -32,10 +33,19 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var client llm.Client
+	if cfg.LLM.HTTP.Provider != llm.ProviderDisabled {
+		client, err = llm.NewHTTPClient(cfg.LLM.HTTP)
+		if err != nil {
+			logger.Error("LLM configuration error", "error", err)
+			os.Exit(1)
+		}
+	}
+	logger.Info("LLM provider configured", "provider", cfg.LLM.HTTP.Provider)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Address(),
-		Handler:           newHandler(logger, cfg, ctx),
+		Handler:           newHandler(logger, cfg, ctx, client),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -70,11 +80,18 @@ func main() {
 	logger.Info("EchoCore stopped")
 }
 
-func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context) http.Handler {
+func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context, clients ...llm.Client) http.Handler {
 	mux := http.NewServeMux()
 	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
 	groupStates := group.NewStateStore()
 	groupPermissions := group.NewAllowlist(cfg.Group.ControlUserIDs)
+	var executor *agent.Executor
+	if len(clients) > 0 && clients[0] != nil {
+		executor = agent.NewExecutor(clients[0], groupStates, logger, agent.ExecutorOptions{
+			Timeout: cfg.LLM.Timeout, MaxConcurrent: cfg.LLM.MaxConcurrent,
+			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars,
+		})
+	}
 	dispatcher := message.NewDispatcher(
 		handler.NewPing(),
 		handler.NewHelp(),
@@ -89,7 +106,7 @@ func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context
 		logger,
 		shutdown,
 		cfg.OneBot.AccessToken,
-		agent.NewRouter(groupStates, dispatcher, logger),
+		agent.NewRouter(groupStates, dispatcher, logger, executor),
 	))
 
 	return mux

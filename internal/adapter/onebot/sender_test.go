@@ -10,9 +10,24 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/xin-24/EchoCore/internal/group"
 	"github.com/xin-24/EchoCore/internal/message"
 	onebotprotocol "github.com/xin-24/EchoCore/internal/onebot"
 )
+
+func TestActionSenderRejectsExpiredSession(t *testing.T) {
+	states := group.NewStateStore()
+	states.SetEnabled("30001", true)
+	session := states.Session("30001")
+	states.SetEnabled("30001", false)
+	states.SetEnabled("30001", true)
+	writer := &recordingActionWriter{}
+	sender := NewActionSender(writer)
+	_, _, err := sender.SendGuarded(context.Background(), message.OutgoingMessage{Platform: message.PlatformQQ, GroupID: "30001", Text: "旧回复"}, session.Guard)
+	if !errors.Is(err, context.Canceled) || writer.payload != nil || len(sender.pending) != 0 {
+		t.Fatalf("旧会话不应写入或遗留等待请求：%v", err)
+	}
+}
 
 func TestActionSenderSendsPrivateMessage(t *testing.T) {
 	writer := &recordingActionWriter{}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 	"github.com/xin-24/EchoCore/internal/message"
@@ -24,6 +25,10 @@ const (
 
 type messageDispatcher interface {
 	Dispatch(message.IncomingMessage) (message.OutgoingMessage, bool)
+}
+
+type messagePreparer interface {
+	Prepare(message.IncomingMessage) message.Work
 }
 
 // WebSocketHandler 接收 NapCat 建立的 OneBot 11 反向 WebSocket 连接。
@@ -87,6 +92,16 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cancelRead()
 		actionRequests.Wait()
 	}()
+	// 模型任务与 Action 等待分别占用资源，模型慢请求不阻塞收包或命令。
+	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error) {
+		select {
+		case actionSlots <- struct{}{}:
+			defer func() { <-actionSlots }()
+			sendReplyGuarded(readCtx, logger, sender, outgoing, guard)
+		default:
+			logger.Warn("OneBot reply skipped because action queue is full")
+		}
+	}
 
 	for {
 		messageType, payload, err := conn.Read(readCtx)
@@ -115,19 +130,38 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// 命令按当前连接的接收顺序分发，避免相邻的 on/off 因协程调度而颠倒。
 		// 网络回复仍异步等待，读循环可以继续接收 ActionResponse。
-		outgoing, handled := dispatchEvent(logger, h.adapter, h.dispatcher, payload)
-		if !handled {
+		incoming, valid := adaptEvent(logger, h.adapter, payload)
+		if !valid {
 			continue
 		}
-
+		var work message.Work
+		if preparer, ok := h.dispatcher.(messagePreparer); ok {
+			work = preparer.Prepare(incoming)
+		} else {
+			work.Reply, work.HasReply = h.dispatcher.Dispatch(incoming)
+		}
+		if work.Execute != nil {
+			actionRequests.Add(1)
+			go func(work message.Work) {
+				defer actionRequests.Done()
+				outgoing, handled := work.Execute(readCtx)
+				if handled {
+					submitReply(outgoing, work.Guard)
+				}
+			}(work)
+			continue
+		}
+		if !work.HasReply {
+			continue
+		}
 		select {
 		case actionSlots <- struct{}{}:
 			actionRequests.Add(1)
-			go func(outgoing message.OutgoingMessage) {
+			go func(work message.Work) {
 				defer actionRequests.Done()
 				defer func() { <-actionSlots }()
-				sendReply(readCtx, logger, sender, outgoing)
-			}(outgoing)
+				sendReplyGuarded(readCtx, logger, sender, work.Reply, work.Guard)
+			}(work)
 		default:
 			logger.Warn("OneBot reply skipped because action queue is full")
 		}
@@ -195,38 +229,50 @@ func dispatchEvent(
 	dispatcher messageDispatcher,
 	payload []byte,
 ) (message.OutgoingMessage, bool) {
-	if !json.Valid(payload) {
+	incoming, ok := adaptEvent(logger, adapter, payload)
+	if !ok {
 		return message.OutgoingMessage{}, false
+	}
+	return dispatcher.Dispatch(incoming)
+}
+
+func adaptEvent(logger *slog.Logger, adapter *Adapter, payload []byte) (message.IncomingMessage, bool) {
+	if !json.Valid(payload) {
+		return message.IncomingMessage{}, false
 	}
 
 	var event onebotprotocol.Event
 	if err := json.Unmarshal(payload, &event); err != nil {
 		logger.Warn("OneBot event decoding failed", "error", err)
-		return message.OutgoingMessage{}, false
+		return message.IncomingMessage{}, false
 	}
 
 	// 忽略 message_sent 和机器人自身发送的事件，避免 EchoCore 回复自己的输出。
 	if event.PostType != onebotprotocol.PostTypeMessage {
-		return message.OutgoingMessage{}, false
+		return message.IncomingMessage{}, false
 	}
 	if event.SelfID != 0 && event.UserID == event.SelfID {
 		logger.Debug("OneBot self message ignored", "user_id", event.UserID)
-		return message.OutgoingMessage{}, false
+		return message.IncomingMessage{}, false
 	}
 
 	incoming, err := adapter.ToIncomingMessage(event)
 	if err != nil {
 		logger.Warn("OneBot message adaptation failed", "error", err)
-		return message.OutgoingMessage{}, false
+		return message.IncomingMessage{}, false
 	}
 	logIncomingMessage(logger, incoming)
-	return dispatcher.Dispatch(incoming)
+	return incoming, true
 }
 
 func sendReply(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage) {
+	sendReplyGuarded(ctx, logger, sender, outgoing, nil)
+}
+
+func sendReplyGuarded(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error) {
 	requestCtx, cancel := context.WithTimeout(ctx, actionResponseTimeout)
 	defer cancel()
-	action, response, err := sender.Send(requestCtx, outgoing)
+	action, response, err := sender.SendGuarded(requestCtx, outgoing, guard)
 	attributes := []any{
 		"action", action.Action,
 		"echo", string(action.Echo),
@@ -250,7 +296,7 @@ func logIncomingMessage(logger *slog.Logger, incoming message.IncomingMessage) {
 	attributes := []any{
 		"user_id", incoming.UserID,
 		"message_id", incoming.MessageID,
-		"message", incoming.Text,
+		"text_chars", utf8.RuneCountInString(incoming.Text),
 	}
 	if incoming.IsGroup {
 		attributes = append(attributes,

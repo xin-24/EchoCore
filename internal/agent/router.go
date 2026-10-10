@@ -33,10 +33,15 @@ type Router struct {
 	states   GroupStateReader
 	commands *message.Dispatcher
 	logger   *slog.Logger
+	executor *Executor
 }
 
-func NewRouter(states GroupStateReader, commands *message.Dispatcher, logger *slog.Logger) *Router {
-	return &Router{states: states, commands: commands, logger: logger}
+func NewRouter(states GroupStateReader, commands *message.Dispatcher, logger *slog.Logger, executors ...*Executor) *Router {
+	router := &Router{states: states, commands: commands, logger: logger}
+	if len(executors) > 0 {
+		router.executor = executors[0]
+	}
+	return router
 }
 
 func (r *Router) Route(incoming message.IncomingMessage) RouteResult {
@@ -79,8 +84,18 @@ func (r *Router) Route(incoming message.IncomingMessage) RouteResult {
 	return result
 }
 
-// Dispatch 接入现有消息链路；本步仅执行命令，候选留待后续 Executor 接入。
+// Dispatch 保留仅同步命令的接口；异步模型链路通过 Prepare 接入。
 func (r *Router) Dispatch(incoming message.IncomingMessage) (message.OutgoingMessage, bool) {
+	work := r.prepare(incoming, false)
+	return work.Reply, work.HasReply
+}
+
+// Prepare 保持命令的同步顺序，模型部分只准备任务，不在此处执行。
+func (r *Router) Prepare(incoming message.IncomingMessage) message.Work {
+	return r.prepare(incoming, true)
+}
+
+func (r *Router) prepare(incoming message.IncomingMessage, allowAI bool) message.Work {
 	result := r.Route(incoming)
 	attrs := []any{"component", "agent.router", "route", result.Kind, "reason", result.Reason,
 		"group_id", incoming.GroupID, "user_id", incoming.UserID, "message_id", incoming.MessageID}
@@ -90,7 +105,11 @@ func (r *Router) Dispatch(incoming message.IncomingMessage) (message.OutgoingMes
 		r.logger.Info("Router message routed", attrs...)
 	}
 	if result.Kind == RouteCommand {
-		return r.commands.Dispatch(result.Message)
+		reply, handled := r.commands.Dispatch(result.Message)
+		return message.Work{Reply: reply, HasReply: handled}
 	}
-	return message.OutgoingMessage{}, false
+	if allowAI && result.Kind == RouteAICandidate && r.executor != nil {
+		return r.executor.Prepare(result.Message)
+	}
+	return message.Work{}
 }

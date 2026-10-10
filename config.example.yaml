@@ -14,3 +14,17 @@ bot:
 # 此文件用于说明配置结构，运行时通过 ECHOCORE_GROUP_CONTROL_USER_IDS 读取白名单。
 group:
   control_user_ids: []
+
+# 仅作说明，运行时仍读取环境变量，不自动加载此 YAML。
+# 修改 Provider / 模型后需重启；不能同时启用或自动切换两个服务。
+llm:
+  provider: "disabled" # disabled / openai-compatible / ollama
+  base_url: "" # 兼容 API 如 https://api.openai.com/v1；Ollama 如 http://127.0.0.1:11434
+  model: "" # 填写服务商可用或本机已安装的模型名称，不设硬编码默认模型
+  # 密钥只通过 ECHOCORE_LLM_API_KEY 配置，不写入文件。
+  token_field: "max_completion_tokens" # 兼容服务若只支持旧字段，改为 max_tokens
+  timeout: "30s" # 判断与生成共用的总期限，最大 2m
+  max_concurrent: 4 # 服务级并发上限，同群额外限制为一个在途模型任务
+  max_output_tokens: 512
+  max_input_chars: 4000
+  max_reply_chars: 2000

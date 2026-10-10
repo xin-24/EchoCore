@@ -27,6 +27,7 @@ type Config struct {
 	Server      Server
 	OneBot      OneBot
 	Group       Group
+	LLM         LLM
 }
 
 type Group struct {
@@ -66,6 +67,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	model, err := loadLLM()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment: environment,
@@ -75,6 +80,7 @@ func Load() (Config, error) {
 			AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN"),
 		},
 		Group: Group{ControlUserIDs: controlUserIDs},
+		LLM:   model,
 	}, nil
 }
 

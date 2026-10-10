@@ -47,6 +47,11 @@ func (s *ActionSender) Send(
 	ctx context.Context,
 	outgoing message.OutgoingMessage,
 ) (onebotprotocol.Action, onebotprotocol.ActionResponse, error) {
+	return s.SendGuarded(ctx, outgoing, nil)
+}
+
+// SendGuarded 在写锁内复核群会话；Guard 只包围写入，不等待响应。
+func (s *ActionSender) SendGuarded(ctx context.Context, outgoing message.OutgoingMessage, guard func(func() error) error) (onebotprotocol.Action, onebotprotocol.ActionResponse, error) {
 	action, err := buildAction(outgoing)
 	if err != nil {
 		return onebotprotocol.Action{}, onebotprotocol.ActionResponse{}, err
@@ -70,7 +75,17 @@ func (s *ActionSender) Send(
 	}
 
 	s.writeMu.Lock()
-	err = s.writer.Write(ctx, websocket.MessageText, payload)
+	write := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return s.writer.Write(ctx, websocket.MessageText, payload)
+	}
+	if guard != nil {
+		err = guard(write)
+	} else {
+		err = write()
+	}
 	s.writeMu.Unlock()
 	if err != nil {
 		return action, onebotprotocol.ActionResponse{}, fmt.Errorf("write OneBot action: %w", err)
