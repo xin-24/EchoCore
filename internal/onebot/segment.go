@@ -4,8 +4,9 @@ package onebot
 type SegmentType string
 
 const (
-	SegmentTypeText SegmentType = "text"
-	SegmentTypeAt   SegmentType = "at"
+	SegmentTypeText  SegmentType = "text"
+	SegmentTypeAt    SegmentType = "at"
+	SegmentTypeReply SegmentType = "reply"
 )
 
 // SegmentData 保存消息段特有的字段，同时允许 NapCat 或其他 OneBot 实现添加扩展字段。

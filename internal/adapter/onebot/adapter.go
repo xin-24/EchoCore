@@ -3,8 +3,10 @@ package onebot
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xin-24/EchoCore/internal/message"
 	onebotprotocol "github.com/xin-24/EchoCore/internal/onebot"
@@ -35,19 +37,22 @@ func (*Adapter) ToIncomingMessage(event onebotprotocol.Event) (message.IncomingM
 		return message.IncomingMessage{}, err
 	}
 
-	text, mentioned, err := extractMessage(event.Message, event.SelfID)
+	text, mentioned, replyToMessageID, err := extractMessage(event.Message, event.SelfID)
 	if err != nil {
 		return message.IncomingMessage{}, err
 	}
 
 	incoming := message.IncomingMessage{
-		Platform:  message.PlatformQQ,
-		SelfID:    formatID(event.SelfID),
-		UserID:    formatID(event.UserID),
-		MessageID: formatID(event.MessageID),
-		Text:      text,
-		IsGroup:   isGroup,
-		Mentioned: mentioned,
+		Platform:         message.PlatformQQ,
+		SelfID:           formatID(event.SelfID),
+		UserID:           formatID(event.UserID),
+		MessageID:        formatID(event.MessageID),
+		Timestamp:        eventTimestamp(event.Time),
+		SenderName:       senderName(event.Sender),
+		ReplyToMessageID: replyToMessageID,
+		Text:             text,
+		IsGroup:          isGroup,
+		Mentioned:        mentioned,
 	}
 	if isGroup {
 		incoming.GroupID = formatID(event.GroupID)
@@ -67,9 +72,10 @@ func isGroupMessage(messageType onebotprotocol.MessageType) (bool, error) {
 	}
 }
 
-func extractMessage(segments []onebotprotocol.MessageSegment, selfID int64) (string, bool, error) {
+func extractMessage(segments []onebotprotocol.MessageSegment, selfID int64) (string, bool, string, error) {
 	var text strings.Builder
 	mentioned := false
+	replyToMessageID := ""
 	selfIDString := formatID(selfID)
 
 	for index, segment := range segments {
@@ -77,21 +83,70 @@ func extractMessage(segments []onebotprotocol.MessageSegment, selfID int64) (str
 		case onebotprotocol.SegmentTypeText:
 			value, ok := segment.Data["text"].(string)
 			if !ok {
-				return "", false, fmt.Errorf("%w: segment[%d] text must be a string", ErrInvalidMessageSegment, index)
+				return "", false, "", fmt.Errorf("%w: segment[%d] text must be a string", ErrInvalidMessageSegment, index)
 			}
 			text.WriteString(value)
 		case onebotprotocol.SegmentTypeAt:
 			target, ok := segment.Data["qq"].(string)
 			if !ok {
-				return "", false, fmt.Errorf("%w: segment[%d] qq must be a string", ErrInvalidMessageSegment, index)
+				return "", false, "", fmt.Errorf("%w: segment[%d] qq must be a string", ErrInvalidMessageSegment, index)
 			}
 			if selfIDString != "" && target == selfIDString {
 				mentioned = true
 			}
+		case onebotprotocol.SegmentTypeReply:
+			target, ok := segmentMessageID(segment.Data["id"])
+			if !ok {
+				return "", false, "", fmt.Errorf("%w: segment[%d] reply id must be a positive integer", ErrInvalidMessageSegment, index)
+			}
+			replyToMessageID = target
 		}
 	}
 
-	return strings.TrimSpace(text.String()), mentioned, nil
+	return strings.TrimSpace(text.String()), mentioned, replyToMessageID, nil
+}
+
+func senderName(sender *onebotprotocol.Sender) string {
+	if sender == nil {
+		return ""
+	}
+	if card := strings.TrimSpace(sender.Card); card != "" {
+		return card
+	}
+	return strings.TrimSpace(sender.Nickname)
+}
+
+// eventTimestamp 将 OneBot Unix 秒转换为 UTC；零值表示事件缺少可用时间。
+// 上下文层可在写入时用本地接收时间补齐零值。
+func eventTimestamp(unixSeconds int64) time.Time {
+	if unixSeconds <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unixSeconds, 0).UTC()
+}
+
+func segmentMessageID(value any) (string, bool) {
+	switch id := value.(type) {
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(id), 10, 64)
+		if err != nil || parsed <= 0 {
+			return "", false
+		}
+		return strconv.FormatInt(parsed, 10), true
+	case int:
+		if id > 0 {
+			return strconv.Itoa(id), true
+		}
+	case int64:
+		if id > 0 {
+			return strconv.FormatInt(id, 10), true
+		}
+	case float64:
+		if id > 0 && id < float64(math.MaxInt64) && math.Trunc(id) == id {
+			return strconv.FormatInt(int64(id), 10), true
+		}
+	}
+	return "", false
 }
 
 func formatID(id int64) string {
