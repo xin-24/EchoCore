@@ -19,7 +19,7 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
 - 通过 `echo` 一一关联 Action 请求与 `ActionResponse`
 
-已包含规则型 Router Agent；当前不包含 LLM、Executor Agent、Memory、RAG 或管理后台。
+已包含规则型 Router Agent、LLM 接口与离线 FakeLLM；当前不包含真实模型 Provider、Executor Agent、Memory、RAG 或管理后台。
 
 ## 环境要求
 
@@ -156,6 +156,27 @@ Phase 2 Step 3 在 OneBot Adapter 和 Dispatcher 之间加入 `internal/agent.Ro
 5. 群聊 `@机器人 /ping` 和 `/help` 仍正常回复；私聊 `/ask 你好` 仅出现 `reason=private_ask` 的候选日志。
 
 冷却、模型判断、Executor 及关闭时取消在途生成尚未实现，将在后续步骤接入；当前没有模型任务或延迟 AI 回复。
+
+## LLM 接口与离线 FakeLLM
+
+Phase 2 Step 4 新增 `internal/llm`，不依赖具体服务商 SDK，也不依赖 OneBot 协议：
+
+- `Decider.Decide(ctx, DecideRequest)`：返回 `reply` 或 `ignore` 及简短原因标签。
+- `Generator.Generate(ctx, GenerateRequest)`：接收当前文本、可选历史、系统提示和输出 token 上限，返回文本与可选用量。
+- `Client`：组合上述两个接口；调用方只有在判断成功且明确为 `reply` 时才继续生成。
+- `FakeLLM`：显式配置固定判断与固定文本，默认忽略；支持分别注入判断/生成错误与延迟，响应 context 取消及超时，并记录并发安全的调用次数。
+
+FakeLLM 不理解语义、不模拟 token 截断、不保存聊天历史、不读取密钥、不请求网络。空文本、超长回复等可作为测试数据；真正的输出校验由后续 Executor 负责。历史的群隔离与裁剪由调用方负责。
+
+离线验收（已安装 Go 且项目依赖已准备好时，无需外网）：
+
+```bash
+GOPROXY=off GOSUMDB=off go test -count=1 -v ./internal/llm ./internal/agent
+```
+
+测试覆盖“回复 / 忽略”、固定文本、默认忽略、错误透传、取消、超时、并发调用及结果隔离；Router 组合测试验证关闭群和确定性命令不会调用模型，忽略结果不会继续生成。
+
+本步只提供接口与离线测试组件，**服务启动路径未装配 FakeLLM**，生产环境也无法通过配置启用它。QQ 的候选消息仍只记录日志，不会收到固定回复；异步模型执行、发送前群状态复核及真实 Provider 留到 Step 5 实现。
 
 ## OneBot Action Sender
 
