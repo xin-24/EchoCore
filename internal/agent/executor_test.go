@@ -44,6 +44,7 @@ func TestExecutorRoutingAndOutput(t *testing.T) {
 				t.Fatal("未创建模型任务")
 			}
 			out, ok := work.Execute(context.Background())
+			work.Finish()
 			if ok != tt.reply {
 				t.Fatalf("回复状态 = %v", ok)
 			}
@@ -66,6 +67,7 @@ func TestExecutorCloseReopenAndSendGuard(t *testing.T) {
 	if _, ok := work.Execute(context.Background()); ok {
 		t.Fatal("关闭再开启后旧任务不能恢复")
 	}
+	work.Finish()
 	if fake.Calls().Generate != 0 {
 		t.Fatal("过期任务不应调用模型")
 	}
@@ -73,6 +75,7 @@ func TestExecutorCloseReopenAndSendGuard(t *testing.T) {
 	if _, ok := work.Execute(context.Background()); !ok {
 		t.Fatal("新任务应成功生成")
 	}
+	work.Finish()
 	states.SetEnabled("group", false)
 	states.SetEnabled("group", true)
 	written := false
@@ -96,6 +99,7 @@ func TestExecutorFailureAndBounds(t *testing.T) {
 			t.Fatal("满载应返回繁忙提示而不是无限排队")
 		}
 		out, ok := work.Execute(context.Background())
+		work.Finish()
 		if !ok || out.Text != "暂时无法生成回复，请稍后再试。" {
 			t.Fatalf("失败未使用通用提示：%+v", out)
 		}
@@ -113,6 +117,7 @@ func TestExecutorFailureAndBounds(t *testing.T) {
 		if _, ok := work.Execute(ctx); ok {
 			t.Fatal("连接取消后不应回复")
 		}
+		work.Finish()
 	}
 }
 
@@ -142,7 +147,7 @@ func TestExecutorCancelsInFlightAndIsolatesGroups(t *testing.T) {
 	done := make(chan bool, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	go func() { _, ok := work.Execute(ctx); done <- ok }()
+	go func() { _, ok := work.Execute(ctx); work.Finish(); done <- ok }()
 	select {
 	case <-client.started:
 	case <-ctx.Done():

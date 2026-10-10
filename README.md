@@ -215,7 +215,7 @@ Ollama Provider 使用原生非流式 `/api/chat`，不要在 Base URL 中重复
 - 未配置 Provider 时默认关闭，不发送模型请求；`/ping`、`/help`、群开关保持可用。
 - 普通群消息先 Decide，只有严格返回 `reply` 才 Generate；无效判断保守忽略。私聊 `/ask` 与开启群中的真实 @ 直接 Generate。
 - 判断与生成在独立协程运行，共用 `ECHOCORE_LLM_TIMEOUT`（默认 `30s`，最大 `2m`）；生成完成后才开始 OneBot 的 5 秒 Action 等待。
-- 服务级 `ECHOCORE_LLM_MAX_CONCURRENT` 默认 4，同群只允许一个在途模型任务，不无限排队；满载时普通消息静默跳过，显式提问收到繁忙提示。
+- 服务级 `ECHOCORE_LLM_MAX_CONCURRENT` 默认 4；按平台、机器人账号、会话类型和目标 ID 隔离 AI 任务。同群（不论发送者）或同一私聊只允许一个在途任务，占用持续到回复发送成功、失败、超时或取消；不同会话可在全局模型并发上限内独立运行。发送等待不占模型执行槽，不无限排队；忙碌时普通群消息静默跳过，显式提问收到繁忙提示。`/ping`、`/help`、`/ai on/off` 不受 AI 会话占用限制。
 - 关闭群会取消该次开启周期的任务，发送器在写入前复核周期。关闭再开启不会恢复旧回复；已写入 NapCat 的消息无法撤回。连接断开或服务退出也会取消模型任务。
 - `ECHOCORE_LLM_MAX_INPUT_CHARS` 默认 4000，超长输入不调用模型；`ECHOCORE_LLM_MAX_OUTPUT_TOKENS` 默认 512；`ECHOCORE_LLM_MAX_REPLY_CHARS` 默认 2000，超过字符上限的回复会截断。
 - 空回复、超时和服务错误不会把内部错误发到 QQ；显式提问得到通用失败提示，普通群消息保持沉默。INFO 不记录对话正文、密钥或服务端错误正文；开发 DEBUG 仍可能包含完整 QQ 事件，请勿公开日志。

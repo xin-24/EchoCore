@@ -23,13 +23,29 @@ type ExecutorOptions struct {
 
 // Executor 负责判断、生成与输出校验；不处理协议，也不能修改群开关。
 type Executor struct {
-	client       llm.Client
-	states       *group.StateStore
-	logger       *slog.Logger
-	options      ExecutorOptions
-	slots        chan struct{}
-	mu           sync.Mutex
-	activeGroups map[string]bool
+	client              llm.Client
+	states              *group.StateStore
+	logger              *slog.Logger
+	options             ExecutorOptions
+	slots               chan struct{}
+	mu                  sync.Mutex
+	activeConversations map[conversationKey]bool
+}
+
+// conversationKey 使用结构化字段，避免群聊、私聊及不同账号之间互相占用。
+type conversationKey struct {
+	platform string
+	selfID   string
+	isGroup  bool
+	targetID string
+}
+
+func conversationFor(incoming message.IncomingMessage) conversationKey {
+	target := incoming.UserID
+	if incoming.IsGroup {
+		target = incoming.GroupID
+	}
+	return conversationKey{incoming.Platform, incoming.SelfID, incoming.IsGroup, target}
 }
 
 func NewExecutor(client llm.Client, states *group.StateStore, logger *slog.Logger, options ExecutorOptions) *Executor {
@@ -48,7 +64,7 @@ func NewExecutor(client llm.Client, states *group.StateStore, logger *slog.Logge
 	if options.MaxReplyChars <= 0 {
 		options.MaxReplyChars = 2000
 	}
-	return &Executor{client: client, states: states, logger: logger, options: options, slots: make(chan struct{}, options.MaxConcurrent), activeGroups: make(map[string]bool)}
+	return &Executor{client: client, states: states, logger: logger, options: options, slots: make(chan struct{}, options.MaxConcurrent), activeConversations: make(map[conversationKey]bool)}
 }
 
 // Prepare 在接收顺序内绑定开启周期并预留有限执行槽，不在读循环调用模型。
@@ -80,34 +96,32 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 	if strings.TrimSpace(incoming.Text) == "" {
 		return message.Work{}
 	}
+	key := conversationFor(incoming)
 	e.mu.Lock()
-	if incoming.IsGroup && e.activeGroups[incoming.GroupID] {
+	if e.activeConversations[key] {
 		e.mu.Unlock()
 		return feedback("当前繁忙，请稍后再试。")
 	}
 	select {
 	case e.slots <- struct{}{}:
-		if incoming.IsGroup {
-			e.activeGroups[incoming.GroupID] = true
-		}
+		e.activeConversations[key] = true
 	default:
 		e.mu.Unlock()
 		return feedback("当前繁忙，请稍后再试。")
 	}
 	e.mu.Unlock()
 	work := message.Work{}
+	// 会话占用持续到发送结束；与只覆盖模型调用的全局执行槽分开释放。
+	work.Finish = sync.OnceFunc(func() {
+		e.mu.Lock()
+		delete(e.activeConversations, key)
+		e.mu.Unlock()
+	})
 	if session != nil {
 		work.Guard = session.Guard
 	}
 	work.Execute = func(parent context.Context) (message.OutgoingMessage, bool) {
-		defer func() {
-			e.mu.Lock()
-			if incoming.IsGroup {
-				delete(e.activeGroups, incoming.GroupID)
-			}
-			<-e.slots
-			e.mu.Unlock()
-		}()
+		defer func() { <-e.slots }()
 		ctx, cancel := context.WithTimeout(parent, e.options.Timeout)
 		defer cancel()
 		if session != nil {

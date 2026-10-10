@@ -93,11 +93,11 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		actionRequests.Wait()
 	}()
 	// 模型任务与 Action 等待分别占用资源，模型慢请求不阻塞收包或命令。
-	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error) {
+	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error, finish func()) {
 		select {
 		case actionSlots <- struct{}{}:
 			defer func() { <-actionSlots }()
-			sendReplyGuarded(readCtx, logger, sender, outgoing, guard)
+			sendReplyWithCompletion(readCtx, logger, sender, outgoing, guard, finish)
 		default:
 			logger.Warn("OneBot reply skipped because action queue is full")
 		}
@@ -144,9 +144,12 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			actionRequests.Add(1)
 			go func(work message.Work) {
 				defer actionRequests.Done()
+				if work.Finish != nil {
+					defer work.Finish()
+				}
 				outgoing, handled := work.Execute(readCtx)
 				if handled {
-					submitReply(outgoing, work.Guard)
+					submitReply(outgoing, work.Guard, work.Finish)
 				}
 			}(work)
 			continue
@@ -270,9 +273,13 @@ func sendReply(ctx context.Context, logger *slog.Logger, sender *ActionSender, o
 }
 
 func sendReplyGuarded(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error) {
+	sendReplyWithCompletion(ctx, logger, sender, outgoing, guard, nil)
+}
+
+func sendReplyWithCompletion(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error, finish func()) {
 	requestCtx, cancel := context.WithTimeout(ctx, actionResponseTimeout)
 	defer cancel()
-	action, response, err := sender.SendGuarded(requestCtx, outgoing, guard)
+	action, response, err := sender.sendGuarded(requestCtx, outgoing, guard, finish)
 	attributes := []any{
 		"action", action.Action,
 		"echo", string(action.Echo),
