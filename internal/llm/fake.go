@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -21,9 +22,12 @@ type FakeOptions struct {
 // FakeLLM 仅供开发与自动测试显式注入，不应注册为生产 Provider。
 // 配置在构造后不可修改；调用计数支持并发读取。
 type FakeLLM struct {
-	options       FakeOptions
-	decideCalls   atomic.Uint64
-	generateCalls atomic.Uint64
+	options          FakeOptions
+	decideCalls      atomic.Uint64
+	generateCalls    atomic.Uint64
+	requestMu        sync.Mutex
+	decideRequests   []DecideRequest
+	generateRequests []GenerateRequest
 }
 
 var _ Client = (*FakeLLM)(nil)
@@ -53,8 +57,28 @@ func (f *FakeLLM) Calls() FakeCalls {
 	return FakeCalls{Decide: f.decideCalls.Load(), Generate: f.generateCalls.Load()}
 }
 
-func (f *FakeLLM) Decide(ctx context.Context, _ DecideRequest) (DecideResponse, error) {
+// Requests 返回模型调用快照的副本，供自动测试检查历史隔离与轮次一致性。
+func (f *FakeLLM) Requests() ([]DecideRequest, []GenerateRequest) {
+	f.requestMu.Lock()
+	defer f.requestMu.Unlock()
+	decide := make([]DecideRequest, len(f.decideRequests))
+	for i, request := range f.decideRequests {
+		decide[i] = DecideRequest{Input: cloneInput(request.Input)}
+	}
+	generate := make([]GenerateRequest, len(f.generateRequests))
+	for i, request := range f.generateRequests {
+		request.Input = cloneInput(request.Input)
+		generate[i] = request
+	}
+	return decide, generate
+}
+
+func (f *FakeLLM) Decide(ctx context.Context, request DecideRequest) (DecideResponse, error) {
 	f.decideCalls.Add(1)
+	f.requestMu.Lock()
+	request.Input = cloneInput(request.Input)
+	f.decideRequests = append(f.decideRequests, request)
+	f.requestMu.Unlock()
 	if err := waitFake(ctx, f.options.DecideDelay); err != nil {
 		return DecideResponse{}, err
 	}
@@ -66,8 +90,12 @@ func (f *FakeLLM) Decide(ctx context.Context, _ DecideRequest) (DecideResponse, 
 
 // Generate 始终返回配置文本，不模拟 token 截断或语义理解。
 // 调用方可以配置超长或空文本来验证自己的结果校验逻辑。
-func (f *FakeLLM) Generate(ctx context.Context, _ GenerateRequest) (GenerateResponse, error) {
+func (f *FakeLLM) Generate(ctx context.Context, request GenerateRequest) (GenerateResponse, error) {
 	f.generateCalls.Add(1)
+	f.requestMu.Lock()
+	request.Input = cloneInput(request.Input)
+	f.generateRequests = append(f.generateRequests, request)
+	f.requestMu.Unlock()
 	if err := waitFake(ctx, f.options.GenerateDelay); err != nil {
 		return GenerateResponse{}, err
 	}
@@ -75,6 +103,11 @@ func (f *FakeLLM) Generate(ctx context.Context, _ GenerateRequest) (GenerateResp
 		return GenerateResponse{}, f.options.GenerateError
 	}
 	return copyResponse(f.options.Response), nil
+}
+
+func cloneInput(input Input) Input {
+	input.History = append([]Message(nil), input.History...)
+	return input
 }
 
 func copyResponse(response GenerateResponse) GenerateResponse {

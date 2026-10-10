@@ -87,7 +87,12 @@ func TestWebSocketHandlerLogsRawOneBotEventsAtDebug(t *testing.T) {
 	}
 
 	for index, test := range tests {
-		assertJSONEqual(t, events[index], []byte(test.event))
+		assertJSONEqual(t, events[index], redactMessageContent([]byte(test.event)))
+	}
+	for _, secret := range []string{"step4-private", "step4-group", "step4-at", "[CQ:at"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("日志泄漏聊天正文 %q: %s", secret, logs.String())
+		}
 	}
 }
 
@@ -112,7 +117,7 @@ func TestLogFrameRecordsHeartbeatAtDebug(t *testing.T) {
 	if !strings.Contains(logs.String(), `"msg":"OneBot heartbeat received"`) {
 		t.Fatalf("heartbeat DEBUG log missing from %q", logs.String())
 	}
-	if !strings.Contains(logs.String(), `"event":{"post_type":"meta_event"`) {
+	if !strings.Contains(logs.String(), `"post_type":"meta_event"`) {
 		t.Fatalf("heartbeat payload missing from %q", logs.String())
 	}
 }
@@ -340,8 +345,8 @@ func TestWebSocketHandlerLogsInvalidJSONFrame(t *testing.T) {
 	if !strings.Contains(logs.String(), `"msg":"OneBot WebSocket frame is not valid JSON"`) {
 		t.Fatalf("warning log missing from %q", logs.String())
 	}
-	if !strings.Contains(logs.String(), `"payload":"not-json"`) {
-		t.Fatalf("raw payload missing from %q", logs.String())
+	if strings.Contains(logs.String(), "not-json") {
+		t.Fatalf("非法帧原文不应进入日志：%q", logs.String())
 	}
 }
 

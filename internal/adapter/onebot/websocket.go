@@ -93,11 +93,11 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		actionRequests.Wait()
 	}()
 	// 模型任务与 Action 等待分别占用资源，模型慢请求不阻塞收包或命令。
-	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error, finish func()) {
+	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool)) {
 		select {
 		case actionSlots <- struct{}{}:
 			defer func() { <-actionSlots }()
-			sendReplyWithCompletion(readCtx, logger, sender, outgoing, guard, finish)
+			sendReplyWithCompletion(readCtx, logger, sender, outgoing, guard, finish, sent)
 		default:
 			logger.Warn("OneBot reply skipped because action queue is full")
 		}
@@ -149,7 +149,7 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				outgoing, handled := work.Execute(readCtx)
 				if handled {
-					submitReply(outgoing, work.Guard, work.Finish)
+					submitReply(outgoing, work.Guard, work.Finish, work.Sent)
 				}
 			}(work)
 			continue
@@ -273,13 +273,13 @@ func sendReply(ctx context.Context, logger *slog.Logger, sender *ActionSender, o
 }
 
 func sendReplyGuarded(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error) {
-	sendReplyWithCompletion(ctx, logger, sender, outgoing, guard, nil)
+	sendReplyWithCompletion(ctx, logger, sender, outgoing, guard, nil, nil)
 }
 
-func sendReplyWithCompletion(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error, finish func()) {
+func sendReplyWithCompletion(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool)) {
 	requestCtx, cancel := context.WithTimeout(ctx, actionResponseTimeout)
 	defer cancel()
-	action, response, err := sender.sendGuarded(requestCtx, outgoing, guard, finish)
+	action, response, err := sender.sendGuarded(requestCtx, outgoing, guard, finish, sent)
 	attributes := []any{
 		"action", action.Action,
 		"echo", string(action.Echo),
@@ -324,7 +324,7 @@ func logFrame(logger *slog.Logger, messageType websocket.MessageType, payload []
 	}
 
 	if json.Valid(payload) {
-		attributes = append(attributes, "event", json.RawMessage(payload))
+		attributes = append(attributes, "event", json.RawMessage(redactMessageContent(payload)))
 
 		var envelope struct {
 			PostType      onebotprotocol.PostType `json:"post_type"`
@@ -341,8 +341,44 @@ func logFrame(logger *slog.Logger, messageType websocket.MessageType, payload []
 		return
 	}
 
-	attributes = append(attributes, "payload", string(payload))
 	logger.Warn("OneBot WebSocket frame is not valid JSON", attributes...)
+}
+
+// redactMessageContent 保留事件结构用于排障，但不把聊天正文写入常规日志。
+func redactMessageContent(payload []byte) []byte {
+	var value any
+	if json.Unmarshal(payload, &value) != nil {
+		return payload
+	}
+	var redact func(any)
+	redact = func(item any) {
+		switch node := item.(type) {
+		case map[string]any:
+			for key, child := range node {
+				if key == "raw_message" {
+					node[key] = "[已隐藏]"
+					continue
+				}
+				if key == "text" {
+					if _, ok := child.(string); ok {
+						node[key] = "[已隐藏]"
+						continue
+					}
+				}
+				redact(child)
+			}
+		case []any:
+			for _, child := range node {
+				redact(child)
+			}
+		}
+	}
+	redact(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return payload
+	}
+	return encoded
 }
 
 func (h *WebSocketHandler) authorized(r *http.Request) bool {

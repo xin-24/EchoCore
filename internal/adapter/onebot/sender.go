@@ -33,6 +33,7 @@ type ActionSender struct {
 	pendingMu sync.Mutex
 	pending   map[string]chan onebotprotocol.ActionResponse
 	completed map[string]func()
+	sent      map[string]func(bool)
 	nextEcho  atomic.Uint64
 }
 
@@ -41,6 +42,7 @@ func NewActionSender(writer actionWriter) *ActionSender {
 		writer:    writer,
 		pending:   make(map[string]chan onebotprotocol.ActionResponse),
 		completed: make(map[string]func()),
+		sent:      make(map[string]func(bool)),
 	}
 }
 
@@ -54,11 +56,11 @@ func (s *ActionSender) Send(
 
 // SendGuarded 在写锁内复核群会话；Guard 只包围写入，不等待响应。
 func (s *ActionSender) SendGuarded(ctx context.Context, outgoing message.OutgoingMessage, guard func(func() error) error) (onebotprotocol.Action, onebotprotocol.ActionResponse, error) {
-	return s.sendGuarded(ctx, outgoing, guard, nil)
+	return s.sendGuarded(ctx, outgoing, guard, nil, nil)
 }
 
 // completed 必须快速返回且可重复调用，用于在响应收包顺序内释放会话。
-func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.OutgoingMessage, guard func(func() error) error, completed func()) (onebotprotocol.Action, onebotprotocol.ActionResponse, error) {
+func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.OutgoingMessage, guard func(func() error) error, completed func(), sent func(bool)) (onebotprotocol.Action, onebotprotocol.ActionResponse, error) {
 	action, err := buildAction(outgoing)
 	if err != nil {
 		return onebotprotocol.Action{}, onebotprotocol.ActionResponse{}, err
@@ -70,7 +72,7 @@ func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.Outgoin
 		return onebotprotocol.Action{}, onebotprotocol.ActionResponse{}, fmt.Errorf("marshal OneBot echo: %w", err)
 	}
 
-	key, responses, err := s.register(action.Echo, completed)
+	key, responses, err := s.register(action.Echo, completed, sent)
 	if err != nil {
 		return onebotprotocol.Action{}, onebotprotocol.ActionResponse{}, err
 	}
@@ -123,14 +125,19 @@ func (s *ActionSender) Resolve(response onebotprotocol.ActionResponse) bool {
 	s.pendingMu.Lock()
 	responses, ok := s.pending[key]
 	completed := s.completed[key]
+	sent := s.sent[key]
 	if ok {
 		responses <- response
 		delete(s.pending, key)
 		delete(s.completed, key)
+		delete(s.sent, key)
 	}
 	s.pendingMu.Unlock()
 	if ok && completed != nil {
 		completed()
+	}
+	if ok && sent != nil {
+		sent(response.Status == onebotprotocol.ActionStatusOK && response.RetCode == 0)
 	}
 	return ok
 }
@@ -152,7 +159,7 @@ func finishAction(
 	return action, response, nil
 }
 
-func (s *ActionSender) register(echo json.RawMessage, completed ...func()) (string, chan onebotprotocol.ActionResponse, error) {
+func (s *ActionSender) register(echo json.RawMessage, completed func(), sent func(bool)) (string, chan onebotprotocol.ActionResponse, error) {
 	key, err := echoKey(echo)
 	if err != nil {
 		return "", nil, fmt.Errorf("register OneBot action echo: %w", err)
@@ -165,8 +172,11 @@ func (s *ActionSender) register(echo json.RawMessage, completed ...func()) (stri
 		return "", nil, fmt.Errorf("register OneBot action echo: duplicate echo %s", key)
 	}
 	s.pending[key] = responses
-	if len(completed) > 0 && completed[0] != nil {
-		s.completed[key] = completed[0]
+	if completed != nil {
+		s.completed[key] = completed
+	}
+	if sent != nil {
+		s.sent[key] = sent
 	}
 	return key, responses, nil
 }
@@ -177,6 +187,7 @@ func (s *ActionSender) removePending(key string, responses chan onebotprotocol.A
 	if current, ok := s.pending[key]; ok && current == responses {
 		delete(s.pending, key)
 		delete(s.completed, key)
+		delete(s.sent, key)
 	}
 }
 

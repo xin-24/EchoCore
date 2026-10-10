@@ -3,17 +3,28 @@ package group
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
+
+var nextGeneration atomic.Uint64
 
 // StateStore 按群保存 AI 参与开关，仅在当前进程内有效。
 // 未记录的群默认关闭；重新创建实例不会恢复旧状态。
 type StateStore struct {
-	mu      sync.RWMutex
-	enabled map[string]*Session
+	mu        sync.RWMutex
+	enabled   map[string]*Session
+	closeHook func(string)
 }
 
 func NewStateStore() *StateStore {
 	return &StateStore{enabled: make(map[string]*Session)}
+}
+
+// SetCloseHook 注册群关闭后的清理动作；Hook 在群状态锁释放后调用。
+func (s *StateStore) SetCloseHook(hook func(string)) {
+	s.mu.Lock()
+	s.closeHook = hook
+	s.mu.Unlock()
 }
 
 func (s *StateStore) Enabled(groupID string) bool {
@@ -29,9 +40,9 @@ func (s *StateStore) SetEnabled(groupID string, enabled bool) bool {
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, previous := s.enabled[groupID]
 	if previous == enabled {
+		s.mu.Unlock()
 		return false
 	}
 	if enabled {
@@ -39,7 +50,7 @@ func (s *StateStore) SetEnabled(groupID string, enabled bool) bool {
 			s.enabled = make(map[string]*Session)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		s.enabled[groupID] = &Session{ctx: ctx, cancel: cancel}
+		s.enabled[groupID] = &Session{ctx: ctx, cancel: cancel, generation: nextGeneration.Add(1)}
 	} else {
 		session := s.enabled[groupID]
 		// 先取消在途请求，再等待已经开始的发送临界区结束。
@@ -47,15 +58,23 @@ func (s *StateStore) SetEnabled(groupID string, enabled bool) bool {
 		session.mu.Lock()
 		session.mu.Unlock()
 		delete(s.enabled, groupID)
+		hook := s.closeHook
+		s.mu.Unlock()
+		if hook != nil {
+			hook(groupID)
+		}
+		return previous != enabled
 	}
+	s.mu.Unlock()
 	return previous != enabled
 }
 
 // Session 对应一次开启周期；关闭后永远失效，重新开启会创建新的实例。
 type Session struct {
-	mu     sync.RWMutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	mu         sync.RWMutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	generation uint64
 }
 
 func (s *StateStore) Session(groupID string) *Session {
@@ -65,6 +84,8 @@ func (s *StateStore) Session(groupID string) *Session {
 }
 
 func (s *Session) Context() context.Context { return s.ctx }
+
+func (s *Session) Generation() uint64 { return s.generation }
 
 // Guard 只包围实际写入，不包围等待 ActionResponse，避免阻塞读循环。
 // 关闭返回后不会开始新的写入；已交给 NapCat 的消息无法撤回。

@@ -28,7 +28,10 @@ type Config struct {
 	OneBot      OneBot
 	Group       Group
 	LLM         LLM
+	Persona     Persona
 }
+
+type Persona struct{ Name, Style, GroupReplyLength string }
 
 type Group struct {
 	ControlUserIDs []string
@@ -71,6 +74,16 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	persona := Persona{
+		Name:             envOrDefault("ECHOCORE_PERSONA_NAME", "EchoCore"),
+		Style:            envOrDefault("ECHOCORE_PERSONA_STYLE", "友善、诚实、自然、简洁"),
+		GroupReplyLength: envOrDefault("ECHOCORE_PERSONA_GROUP_REPLY_LENGTH", "简短"),
+	}
+	for key, value := range map[string]string{"ECHOCORE_PERSONA_NAME": persona.Name, "ECHOCORE_PERSONA_STYLE": persona.Style, "ECHOCORE_PERSONA_GROUP_REPLY_LENGTH": persona.GroupReplyLength} {
+		if strings.TrimSpace(value) == "" || len([]rune(value)) > 500 {
+			return Config{}, fmt.Errorf("%s 不能为空且最多 500 个字符", key)
+		}
+	}
 
 	return Config{
 		Environment: environment,
@@ -79,8 +92,9 @@ func Load() (Config, error) {
 			Path:        oneBotPath,
 			AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN"),
 		},
-		Group: Group{ControlUserIDs: controlUserIDs},
-		LLM:   model,
+		Group:   Group{ControlUserIDs: controlUserIDs},
+		LLM:     model,
+		Persona: persona,
 	}, nil
 }
 

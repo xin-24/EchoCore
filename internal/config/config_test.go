@@ -13,6 +13,9 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("ECHOCORE_ONEBOT_PATH", "")
 	t.Setenv("ECHOCORE_ONEBOT_ACCESS_TOKEN", "")
 	t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", "")
+	t.Setenv("ECHOCORE_PERSONA_NAME", "")
+	t.Setenv("ECHOCORE_PERSONA_STYLE", "")
+	t.Setenv("ECHOCORE_PERSONA_GROUP_REPLY_LENGTH", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -32,6 +35,27 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(cfg.Group.ControlUserIDs) != 0 {
 		t.Fatal("默认群控制白名单应为空")
+	}
+	if cfg.Persona.Name != "EchoCore" || cfg.Persona.Style == "" || cfg.Persona.GroupReplyLength == "" {
+		t.Fatalf("人设默认值错误：%+v", cfg.Persona)
+	}
+}
+
+func TestLoadPersonaValidation(t *testing.T) {
+	t.Setenv("ECHOCORE_PERSONA_NAME", "Echo")
+	t.Setenv("ECHOCORE_PERSONA_STYLE", "简洁友善")
+	t.Setenv("ECHOCORE_PERSONA_GROUP_REPLY_LENGTH", "简短")
+	cfg, err := Load()
+	if err != nil || cfg.Persona.Name != "Echo" {
+		t.Fatalf("人设环境变量加载失败：%+v, %v", cfg.Persona, err)
+	}
+	t.Setenv("ECHOCORE_PERSONA_STYLE", "   ")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ECHOCORE_PERSONA_STYLE") {
+		t.Fatalf("应拒绝空人设风格：%v", err)
+	}
+	t.Setenv("ECHOCORE_PERSONA_STYLE", strings.Repeat("名", 501))
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ECHOCORE_PERSONA_STYLE") {
+		t.Fatalf("应拒绝超长人设风格：%v", err)
 	}
 }
 

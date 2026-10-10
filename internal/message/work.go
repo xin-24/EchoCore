@@ -11,6 +11,8 @@ type Work struct {
 	Execute  func(context.Context) (OutgoingMessage, bool)
 	// Finish 快速释放会话占用，可并发重复调用；仅在执行结束且发送已有结果或终止后调用。
 	Finish func()
+	// Sent 在 OneBot Action 得到明确回执后调用；成功才允许写入 assistant 历史。
+	Sent func(bool)
 	// Guard 由发送器在实际网络写入前调用，用于阻止失效会话的回复。
 	Guard func(func() error) error
 }

@@ -28,3 +28,13 @@ llm:
   max_output_tokens: 512
   max_input_chars: 4000
   max_reply_chars: 2000
+
+# 下列人设同样通过环境变量读取；修改后需重启服务。
+persona:
+  name: "EchoCore" # ECHOCORE_PERSONA_NAME，最多 500 字符
+  style: "友善、诚实、自然、简洁" # ECHOCORE_PERSONA_STYLE，最多 500 字符
+  group_reply_length: "简短" # ECHOCORE_PERSONA_GROUP_REPLY_LENGTH，最多 500 字符
+
+# 短期上下文为内存默认策略，不由此文件加载或配置：闲置 30 分钟过期，
+# 每会话最多 100 条；模型使用最近 20 条，总输入预算 8000 个 Unicode 字符。
+# 服务重启或群内 /ai off 后清空；不会写入数据库或常规日志。

@@ -199,6 +199,28 @@ func TestActionSenderReturnsFailedResponse(t *testing.T) {
 	}
 }
 
+func TestActionSenderReportsConfirmedDeliveryResult(t *testing.T) {
+	for _, status := range []onebotprotocol.ActionStatus{onebotprotocol.ActionStatusOK, onebotprotocol.ActionStatusFailed} {
+		t.Run(string(status), func(t *testing.T) {
+			writer := &recordingActionWriter{}
+			sender := NewActionSender(writer)
+			var delivered []bool
+			writer.onWrite = func(payload []byte) {
+				var action onebotprotocol.Action
+				if err := json.Unmarshal(payload, &action); err != nil {
+					t.Fatal(err)
+				}
+				sender.Resolve(onebotprotocol.ActionResponse{Status: status, RetCode: map[bool]int{true: 0, false: 100}[status == onebotprotocol.ActionStatusOK], Echo: action.Echo})
+			}
+			_, _, _ = sender.sendGuarded(context.Background(), message.OutgoingMessage{Platform: message.PlatformQQ, UserID: "20001", Text: "回复"}, nil, nil, func(ok bool) { delivered = append(delivered, ok) })
+			want := status == onebotprotocol.ActionStatusOK
+			if len(delivered) != 1 || delivered[0] != want {
+				t.Fatalf("发送确认结果 = %v，期望 %v", delivered, want)
+			}
+		})
+	}
+}
+
 func TestActionSenderRemovesTimedOutRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	writer := &recordingActionWriter{onWrite: func([]byte) { cancel() }}

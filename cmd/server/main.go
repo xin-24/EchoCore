@@ -14,6 +14,7 @@ import (
 	"github.com/xin-24/EchoCore/internal/adapter/onebot"
 	"github.com/xin-24/EchoCore/internal/agent"
 	"github.com/xin-24/EchoCore/internal/config"
+	"github.com/xin-24/EchoCore/internal/contextstore"
 	"github.com/xin-24/EchoCore/internal/group"
 	"github.com/xin-24/EchoCore/internal/handler"
 	"github.com/xin-24/EchoCore/internal/llm"
@@ -84,12 +85,17 @@ func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context
 	mux := http.NewServeMux()
 	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
 	groupStates := group.NewStateStore()
+	contexts := contextstore.New()
+	contexts.StartSweeper(shutdown)
+	groupStates.SetCloseHook(contexts.ClearGroup)
 	groupPermissions := group.NewAllowlist(cfg.Group.ControlUserIDs)
 	var executor *agent.Executor
 	if len(clients) > 0 && clients[0] != nil {
 		executor = agent.NewExecutor(clients[0], groupStates, logger, agent.ExecutorOptions{
 			Timeout: cfg.LLM.Timeout, MaxConcurrent: cfg.LLM.MaxConcurrent,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars,
+			ContextStore: contexts, PersonaName: cfg.Persona.Name, PersonaStyle: cfg.Persona.Style,
+			GroupReplyLength: cfg.Persona.GroupReplyLength,
 		})
 	}
 	dispatcher := message.NewDispatcher(
