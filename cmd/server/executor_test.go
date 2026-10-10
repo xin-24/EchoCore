@@ -105,7 +105,7 @@ func TestRealProviderPipelineThroughWebSocket(t *testing.T) {
 	}
 }
 
-func TestPrivateAskWithExecutor(t *testing.T) {
+func TestPrivateMessageWithExecutor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	fake, _ := llm.NewFakeLLM(llm.FakeOptions{Response: llm.GenerateResponse{Text: "私聊回答"}})
@@ -113,7 +113,7 @@ func TestPrivateAskWithExecutor(t *testing.T) {
 	defer server.Close()
 	conn := dialGroupControl(t, ctx, server)
 	defer conn.CloseNow()
-	event := protocol.Event{SelfID: 10001, UserID: 20001, PostType: protocol.PostTypeMessage, MessageType: protocol.MessageTypePrivate, Message: []protocol.MessageSegment{{Type: protocol.SegmentTypeText, Data: protocol.SegmentData{"text": "/ask 你好"}}}}
+	event := protocol.Event{SelfID: 10001, UserID: 20001, PostType: protocol.PostTypeMessage, MessageType: protocol.MessageTypePrivate, Message: []protocol.MessageSegment{{Type: protocol.SegmentTypeText, Data: protocol.SegmentData{"text": "你好"}}}}
 	payload, _ := json.Marshal(event)
 	if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestPrivateAskWithExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := fake.Calls(); got.Decide != 0 || got.Generate != 1 {
-		t.Fatalf("私聊不应调用群聊判断：%+v", got)
+		t.Fatalf("普通私聊应直接生成，不调用群聊参与判断：%+v", got)
 	}
 }
 

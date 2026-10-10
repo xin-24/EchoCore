@@ -141,10 +141,10 @@ ECHOCORE_GROUP_CONTROL_USER_IDS="20001,20002" go run ./cmd/server
 
 Phase 2 Step 3 在 OneBot Adapter 和 Dispatcher 之间加入 `internal/agent.Router`，返回 `ignore`、`command` 或 `ai_candidate`。路由本身不调用模型、不改变群状态；命令由原 Dispatcher 执行。
 
-- 开启群：任何成员的非空普通文本都可进入候选，不要求 @ 或 `/ask`；启用模型时经 Decide 判断是否值得回复。直接 @ 的问题优先生成，不调用 Decide。
+- 开启群：任何成员的非空普通文本都可进入候选，不要求 @；启用模型时经 Decide 判断是否值得回复。直接 @ 的问题优先生成，不调用 Decide。
 - 关闭群：普通文本与直接 @ 都不会进入 AI 候选；`@机器人 /ai on`、`/ai off`、`/ping`、`/help` 仍可处理。
 - 群命令继续要求真实 @；未知 `/` 命令、空文本、纯图片等无文本消息及自身消息不会进入候选。已知命令参数错误也不会回落到 AI。
-- 私聊仅 `/ask 问题` 进入 AI 候选，并去掉命令前缀；普通私聊与空 `/ask` 忽略。启用模型时直接生成回答。
+- 私聊普通文本直接进入 AI 候选，并直接生成回答，不经过群聊参与判断；普通斜杠命令仅处理已注册命令，`/ask` 已取消并按未知命令忽略。
 - 候选和命令在 INFO 输出 `Router message routed`，仅带路由、原因与标识字段；忽略原因在 DEBUG 输出。完整事件继续只在 DEBUG 输出。
 
 仅验收候选路由（使用默认 `ECHOCORE_LLM_PROVIDER=disabled`，先重启 Go）：
@@ -153,7 +153,7 @@ Phase 2 Step 3 在 OneBot Adapter 和 Dispatcher 之间加入 `internal/agent.Ro
 2. 任意成员在群 A 发普通文本，终端应出现 `route=ai_candidate`、`reason=group_enabled`，QQ 不会收到 AI 回复。
 3. 在未开启的群 B 发相同文本，不应出现该消息的 `ai_candidate` 路由日志。
 4. 在群 A 发送 `@机器人 /ai off`，再发普通文本或直接 @，均不应出现候选日志。原始收消息 INFO 日志仍会出现，这不表示触发了 AI。
-5. 群聊 `@机器人 /ping` 和 `/help` 仍正常回复；私聊 `/ask 你好` 仅出现 `reason=private_ask` 的候选日志。
+5. 群聊 `@机器人 /ping` 和 `/help` 仍正常回复；私聊直接发送 `你好`，应出现 `reason=private_message` 的候选日志并收到回答。
 
 模型启用后的验收见下面的 Step 5；冷却与更精细的频率控制仍留待 Step 6。
 
@@ -213,7 +213,7 @@ Ollama Provider 使用原生非流式 `/api/chat`，不要在 Base URL 中重复
 ### 运行边界与保护
 
 - 未配置 Provider 时默认关闭，不发送模型请求；`/ping`、`/help`、群开关保持可用。
-- 普通群消息先 Decide，只有严格返回 `reply` 才 Generate；无效判断保守忽略。私聊 `/ask` 与开启群中的真实 @ 直接 Generate。
+- 普通群消息先 Decide，只有严格返回 `reply` 才 Generate；无效判断保守忽略。私聊普通消息与开启群中的真实 @ 直接 Generate。
 - 判断与生成在独立协程运行，共用 `ECHOCORE_LLM_TIMEOUT`（默认 `30s`，最大 `2m`）；生成完成后才开始 OneBot 的 5 秒 Action 等待。
 - 服务级 `ECHOCORE_LLM_MAX_CONCURRENT` 默认 4；按平台、机器人账号、会话类型和目标 ID 隔离 AI 任务。同群（不论发送者）或同一私聊只允许一个在途任务，占用持续到回复发送成功、失败、超时或取消；不同会话可在全局模型并发上限内独立运行。发送等待不占模型执行槽，不无限排队；忙碌时普通群消息静默跳过，显式提问收到繁忙提示。`/ping`、`/help`、`/ai on/off` 不受 AI 会话占用限制。
 - 关闭群会取消该次开启周期的任务，发送器在写入前复核周期。关闭再开启不会恢复旧回复；已写入 NapCat 的消息无法撤回。连接断开或服务退出也会取消模型任务。
@@ -224,7 +224,7 @@ Ollama Provider 使用原生非流式 `/api/chat`，不要在 Base URL 中重复
 ### 手动验收真实模型
 
 1. 配置一种实际可用的 Provider 并重启 Go，确认日志显示所选 Provider，NapCat 已连接。
-2. 私聊 `/ask 用一句话介绍你自己`，应得到模型回答。
+2. 私聊直接发送 `用一句话介绍你自己`，应得到模型回答。
 3. 白名单用户在群 A 发送 `@机器人 /ai on`，再 `@机器人 用一句话解释什么是反向 WebSocket`，应在原群收到回答。
 4. 不 @ 发送普通问题，应由模型决定是否回复；“哈哈”等无明确问题的文本应倾向忽略，但语义判断不是确定性规则。
 5. 群 B 未开启，即使 @ 也不触发 AI；两群 `/ping`、`/help` 的原规则保持不变。

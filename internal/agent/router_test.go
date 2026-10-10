@@ -3,6 +3,7 @@ package agent
 import (
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/xin-24/EchoCore/internal/group"
@@ -33,10 +34,10 @@ func TestRouterRoutes(t *testing.T) {
 		{"启停命令", "/ai on", "closed", true, true, false, RouteCommand, "supported_command"},
 		{"未知命令", "/unknown", "enabled", true, true, false, RouteIgnore, "unknown_command"},
 		{"命令名称精确匹配", "/pingpong", "enabled", true, true, false, RouteIgnore, "unknown_command"},
-		{"群聊不支持ask", "/ask 问题", "enabled", true, true, false, RouteIgnore, "unknown_command"},
-		{"私聊普通消息", "你好", "", false, false, false, RouteIgnore, "private_requires_ask"},
-		{"私聊显式提问", " /ask  问题 ", "", false, false, false, RouteAICandidate, "private_ask"},
-		{"空提问", "/ask ", "", false, false, false, RouteIgnore, "empty_question"},
+		{"群聊不支持ask命令", "/ask 问题", "enabled", true, true, false, RouteIgnore, "unknown_command"},
+		{"私聊普通消息直接进入AI", "你好", "", false, false, false, RouteAICandidate, "private_message"},
+		{"私聊多词消息保留原文", "  你好，帮我解释一下  ", "", false, false, false, RouteAICandidate, "private_message"},
+		{"旧ask命令已取消", "/ask 问题", "", false, false, false, RouteIgnore, "unknown_command"},
 		{"私聊命令", "/help", "", false, false, false, RouteCommand, "supported_command"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -49,8 +50,8 @@ func TestRouterRoutes(t *testing.T) {
 			if got.Kind != tt.kind || got.Reason != tt.reason {
 				t.Fatalf("路由结果 = %+v", got)
 			}
-			if tt.reason == "private_ask" && got.Message.Text != "问题" {
-				t.Fatalf("提问未去除命令前缀：%q", got.Message.Text)
+			if tt.reason == "private_message" && strings.TrimSpace(got.Message.Text) != strings.TrimSpace(tt.text) {
+				t.Fatalf("私聊正文被意外修改：%q", got.Message.Text)
 			}
 		})
 	}

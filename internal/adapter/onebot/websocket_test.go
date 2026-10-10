@@ -200,7 +200,7 @@ func TestWebSocketHandlerSendsCommandReplies(t *testing.T) {
 				"action": "send_group_msg",
 				"params": {
 					"group_id": 30003000,
-					"message": [{"type":"text","data":{"text":"可用命令：\n/ping - 回复 pong\n/help - 显示此帮助\n/ai on - 开启本群 AI 参与开关（仅白名单）\n/ai off - 关闭本群 AI 参与开关（仅白名单）\n群命令需要 @机器人；AI 开关默认关闭，服务重启后关闭。"}}]
+				"message": [{"type":"text","data":{"text":"可用命令：\n/ping - 回复 pong\n/help - 显示此帮助\n/ai on - 开启本群 AI 参与开关（仅白名单）\n/ai off - 关闭本群 AI 参与开关（仅白名单）\n私聊直接发送消息即可与 AI 对话。群命令需要 @机器人；AI 开关默认关闭，服务重启后关闭。"}}]
 				},
 				"echo": "echocore-1"
 			}`),

@@ -63,18 +63,10 @@ func (r *Router) Route(incoming message.IncomingMessage) RouteResult {
 			} else {
 				result.Kind, result.Reason = RouteCommand, "supported_command"
 			}
-		case fields[0] == "/ask" && !incoming.IsGroup:
-			question := strings.TrimSpace(strings.TrimPrefix(text, "/ask"))
-			if question == "" {
-				result.Reason = "empty_question"
-			} else {
-				result.Kind, result.Reason = RouteAICandidate, "private_ask"
-				result.Message.Text = question
-			}
 		case strings.HasPrefix(text, "/"):
 			result.Reason = "unknown_command"
 		case !incoming.IsGroup:
-			result.Reason = "private_requires_ask"
+			result.Kind, result.Reason = RouteAICandidate, "private_message"
 		case !r.states.Enabled(incoming.GroupID):
 			result.Reason = "group_disabled"
 		default:
