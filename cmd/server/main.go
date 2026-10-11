@@ -20,12 +20,14 @@ import (
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/message"
+	"github.com/xin-24/EchoCore/internal/settings"
+	"github.com/xin-24/EchoCore/internal/storage"
 )
 
 const shutdownTimeout = 5 * time.Second
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.LoadBootstrap()
 	if err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("configuration error", "error", err)
 		os.Exit(1)
@@ -34,19 +36,30 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var client llm.Client
-	if cfg.LLM.HTTP.Provider != llm.ProviderDisabled {
-		client, err = llm.NewHTTPClient(cfg.LLM.HTTP)
-		if err != nil {
-			logger.Error("LLM configuration error", "error", err)
-			os.Exit(1)
-		}
+	repository, err := storage.OpenSettings(ctx, cfg.SettingsDB)
+	if err != nil {
+		logger.Error("settings database initialization failed", "error", err)
+		os.Exit(1)
 	}
-	logger.Info("LLM provider configured", "provider", cfg.LLM.HTTP.Provider)
+	defer repository.Close()
+	configuration, err := settings.Open(ctx, repository, func() (settings.Values, error) {
+		initial := cfg
+		if err := config.LoadInitialBusiness(&initial); err != nil {
+			return settings.Values{}, err
+		}
+		return settings.FromConfig(initial), nil
+	}, nil)
+	if err != nil {
+		logger.Error("settings initialization failed", "error", err)
+		_ = repository.Close()
+		os.Exit(1)
+	}
+	view := configuration.View()
+	logger.Info("business settings loaded", "source", view.Source, "revision", view.Revision, "provider", view.Values.Model.Provider, "model_available", view.ModelAvailable)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Address(),
-		Handler:           newHandler(logger, cfg, ctx, client),
+		Handler:           newConfiguredHandler(logger, cfg, ctx, configuration),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -82,20 +95,36 @@ func main() {
 }
 
 func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context, clients ...llm.Client) http.Handler {
+	return buildHandler(logger, cfg, shutdown, nil, clients...)
+}
+
+func newConfiguredHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context, configuration *settings.Service) http.Handler {
+	return buildHandler(logger, cfg, shutdown, configuration)
+}
+
+func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context, configuration *settings.Service, clients ...llm.Client) http.Handler {
 	mux := http.NewServeMux()
 	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
 	groupStates := group.NewStateStore()
 	contexts := contextstore.New()
 	contexts.StartSweeper(shutdown)
 	groupStates.SetCloseHook(contexts.ClearGroup)
-	groupPermissions := group.NewAllowlist(cfg.Group.ControlUserIDs)
+	var groupPermissions handler.ControlPermissions = group.NewAllowlist(cfg.Group.ControlUserIDs)
+	if configuration != nil {
+		groupPermissions = configuration
+	}
 	var executor *agent.Executor
-	if len(clients) > 0 && clients[0] != nil {
-		executor = agent.NewExecutor(clients[0], groupStates, logger, agent.ExecutorOptions{
+	var client llm.Client
+	if len(clients) > 0 {
+		client = clients[0]
+	}
+	if client != nil || configuration != nil {
+		executor = agent.NewExecutor(client, groupStates, logger, agent.ExecutorOptions{
 			Timeout: cfg.LLM.Timeout, MaxConcurrent: cfg.LLM.MaxConcurrent,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars,
 			ContextStore: contexts, PersonaName: cfg.Persona.Name, PersonaStyle: cfg.Persona.Style,
 			GroupReplyLength: cfg.Persona.GroupReplyLength,
+			Settings:         configuration,
 		})
 	}
 	dispatcher := message.NewDispatcher(

@@ -41,6 +41,22 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestBootstrapIgnoresObsoleteBusinessEnvironment(t *testing.T) {
+	t.Setenv("ECHOCORE_ENV", "development")
+	t.Setenv("ECHOCORE_SERVER_PORT", "8080")
+	t.Setenv("ECHOCORE_ONEBOT_PATH", "/onebot/v11/ws")
+	t.Setenv("ECHOCORE_SETTINGS_DB", "data/custom.db")
+	t.Setenv("ECHOCORE_LLM_PROVIDER", "invalid-old-provider")
+	t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", "invalid-old-id")
+	cfg, err := LoadBootstrap()
+	if err != nil || cfg.SettingsDB != "data/custom.db" {
+		t.Fatalf("旧业务环境变量影响启动：%+v %v", cfg, err)
+	}
+	if err := LoadInitialBusiness(&cfg); err == nil {
+		t.Fatal("首次导入时仍须校验环境业务配置")
+	}
+}
+
 func TestLoadPersonaValidation(t *testing.T) {
 	t.Setenv("ECHOCORE_PERSONA_NAME", "Echo")
 	t.Setenv("ECHOCORE_PERSONA_STYLE", "简洁友善")

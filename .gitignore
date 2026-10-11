@@ -5,6 +5,13 @@ docs/
 config.yaml
 .env
 
+# Runtime configuration database (no conversation transcripts)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Build and test outputs
 bin/
 coverage.out

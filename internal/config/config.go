@@ -29,6 +29,7 @@ type Config struct {
 	Group       Group
 	LLM         LLM
 	Persona     Persona
+	SettingsDB  string
 }
 
 type Persona struct{ Name, Style, GroupReplyLength string }
@@ -48,6 +49,18 @@ type OneBot struct {
 }
 
 func Load() (Config, error) {
+	cfg, err := LoadBootstrap()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := LoadInitialBusiness(&cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// LoadBootstrap 仅读取启动参数；已有数据库时不再校验或覆盖旧业务环境变量。
+func LoadBootstrap() (Config, error) {
 	environment := Environment(strings.ToLower(envOrDefault("ECHOCORE_ENV", string(defaultEnvironment))))
 	if environment != EnvironmentDevelopment && environment != EnvironmentProduction {
 		return Config{}, fmt.Errorf("ECHOCORE_ENV must be development or production")
@@ -66,13 +79,23 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("ECHOCORE_ONEBOT_PATH must be an absolute URL path without a query or fragment")
 	}
 
+	return Config{
+		Environment: environment,
+		Server:      Server{Host: host, Port: port},
+		OneBot:      OneBot{Path: oneBotPath, AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN")},
+		SettingsDB:  envOrDefault("ECHOCORE_SETTINGS_DB", "data/echocore.db"),
+	}, nil
+}
+
+// LoadInitialBusiness 只在首次导入环境业务配置时调用，不保存任何密钥明文。
+func LoadInitialBusiness(cfg *Config) error {
 	controlUserIDs, err := parseControlUserIDs(os.Getenv("ECHOCORE_GROUP_CONTROL_USER_IDS"))
 	if err != nil {
-		return Config{}, err
+		return err
 	}
 	model, err := loadLLM()
 	if err != nil {
-		return Config{}, err
+		return err
 	}
 	persona := Persona{
 		Name:             envOrDefault("ECHOCORE_PERSONA_NAME", "EchoCore"),
@@ -81,21 +104,14 @@ func Load() (Config, error) {
 	}
 	for key, value := range map[string]string{"ECHOCORE_PERSONA_NAME": persona.Name, "ECHOCORE_PERSONA_STYLE": persona.Style, "ECHOCORE_PERSONA_GROUP_REPLY_LENGTH": persona.GroupReplyLength} {
 		if strings.TrimSpace(value) == "" || len([]rune(value)) > 500 {
-			return Config{}, fmt.Errorf("%s 不能为空且最多 500 个字符", key)
+			return fmt.Errorf("%s 不能为空且最多 500 个字符", key)
 		}
 	}
 
-	return Config{
-		Environment: environment,
-		Server:      Server{Host: host, Port: port},
-		OneBot: OneBot{
-			Path:        oneBotPath,
-			AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN"),
-		},
-		Group:   Group{ControlUserIDs: controlUserIDs},
-		LLM:     model,
-		Persona: persona,
-	}, nil
+	cfg.Group = Group{ControlUserIDs: controlUserIDs}
+	cfg.LLM = model
+	cfg.Persona = persona
+	return nil
 }
 
 // parseControlUserIDs 校验并去重逗号分隔的 QQ 号；未配置时默认拒绝所有启停操作。

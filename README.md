@@ -1,6 +1,6 @@
 # EchoCore
 
-EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当前已跑通 Phase 1 的 QQ 双向消息链路，开始实现 Phase 2 的群聊 AI 参与控制。
+EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。已实现 QQ 双向消息、群聊 AI 参与、短期上下文与人设，正在建设 Phase 4 管理基础。
 
 ## 当前范围
 
@@ -19,11 +19,12 @@ EchoCore 是一个以 Go 为核心的可扩展、多平台 AI Agent 框架。当
 - 通过 `send_private_msg` / `send_group_msg` 发送 QQ 回复
 - 通过 `echo` 一一关联 Action 请求与 `ActionResponse`
 
-已包含 Router Agent、Executor Agent、LLM 接口、离线 FakeLLM、OpenAI 兼容 API 与 Ollama Provider。模型默认关闭，可通过配置启用其中一种；当前不包含聊天历史管理、Memory、RAG 或管理后台。
+已包含 Router Agent、Executor Agent、LLM 接口、离线 FakeLLM、OpenAI 兼容 API 与 Ollama Provider，以及内存短期上下文。Phase 4 Step 4 新增 SQLite 业务配置与每轮配置快照；管理登录、管理 HTTP API、网页后台、长期记忆和 RAG 尚未实现。
 
 ## 环境要求
 
 - Go 1.24 或更高版本
+- SQLite 驱动使用 CGO：需要 `CGO_ENABLED=1` 和本机 C 编译工具链（macOS 可用 Xcode Command Line Tools）。
 
 ## 启动
 
@@ -43,7 +44,19 @@ ECHOCORE_SERVER_HOST=0.0.0.0 ECHOCORE_SERVER_PORT=9090 go run ./cmd/server
 ECHOCORE_ENV=production go run ./cmd/server
 ```
 
-`config.example.yaml` 仅说明配置结构，不自动加载；运行时使用环境变量。真实 `config.yaml` 已被 Git 忽略。
+`config.example.yaml` 仅说明配置结构，不自动加载。启动参数来自环境变量；业务配置首次导入 SQLite 后以数据库为准。真实 `config.yaml` 和运行数据库已被 Git 忽略。
+
+### 统一配置服务（Phase 4 Step 4）
+
+默认配置数据库为工作目录下的 `data/echocore.db`，可用 `ECHOCORE_SETTINGS_DB` 指定路径。首次启动从环境导入模型、人设、白名单和执行限额；以后启动读取已保存版本，修改旧业务环境变量不会覆盖数据库。监听地址、OneBot Token 仍在启动时从环境读取。群开关与短期聊天仍仅在内存，重启不会恢复开启状态或聊天历史。
+
+模型密钥仅保存 `environment` 引用，每次进程启动从 `ECHOCORE_LLM_API_KEY` 解析，数据库不保存密钥明文。引用密钥缺失时服务可启动，但日志中的 `model_available` 为 false，AI 不调用模型。该状态表示本地配置可否构造客户端，不代表已经向真实模型验证连接成功。
+
+开发接口 `settings.Service.Update(ctx, revision, values)` 校验完整配置、构造客户端并事务保存，再发布新版本；版本冲突返回 `ErrConflict`，保存失败保留旧版本。每轮任务在 Prepare 时绑定模型、人设、超时和输出限额；旧任务使用原版本，新任务使用新版本。并发上限仅允许无在途任务时更新，发送等待也计入占用。权限更新立即影响下一条 QQ 控制命令。
+
+当前尚未开放管理 HTTP 写入口或配置页面，因此不能通过浏览器修改这些设置。下面的环境示例用于首次导入；开发时如需另建一套环境配置，可显式选择一个尚不存在的数据库路径，例如 `ECHOCORE_SETTINGS_DB=data/trial.db`，原数据库保持不变。生产运行限定单实例管理同一数据库，不直接编辑运行中数据库。
+
+备份与恢复首版采用停机复制：先停止 EchoCore，复制完整配置数据库并保持文件权限；恢复时停机替换到指定路径，再提供原环境密钥启动。数据库迁移在事务中执行；程序拒绝打开高于自身支持版本的数据库。
 
 ## NapCat 反向 WebSocket
 
@@ -70,7 +83,7 @@ ECHOCORE_ENV=production go run ./cmd/server
 2. 在机器人所在群发送普通文本 `step4-group`。
 3. 在群内发送 `@机器人 step4-at`。
 
-开发环境会在 DEBUG 日志中记录 NapCat 发来的完整 OneBot JSON，例如：
+开发环境会在 DEBUG 日志中记录 NapCat 发来的 OneBot 事件结构，正文已脱敏，例如：
 
 ```text
 level=DEBUG msg="OneBot raw frame received" component=onebot.websocket event=...
@@ -180,7 +193,7 @@ GOPROXY=off GOSUMDB=off go test -count=1 -v ./internal/llm ./internal/agent
 
 ## Executor 与可切换 Provider
 
-Phase 2 Step 5 支持 `disabled`、`openai-compatible`、`ollama`。每次启动只选择一种，后续换服务或模型只需修改环境变量并重启，不自动回退或同时调用两家服务。
+支持 `disabled`、`openai-compatible`、`ollama`，当前每轮判断与生成共用一个 Provider。以下环境变量用于首次导入数据库；后续配置更新经统一配置服务生效，不自动回退或同时调用两家服务。
 
 ### 云端兼容 API
 
@@ -220,7 +233,7 @@ Ollama Provider 使用原生非流式 `/api/chat`，不要在 Base URL 中重复
 - `ECHOCORE_LLM_MAX_INPUT_CHARS` 默认 4000，超长输入不调用模型；`ECHOCORE_LLM_MAX_OUTPUT_TOKENS` 默认 512；`ECHOCORE_LLM_MAX_REPLY_CHARS` 默认 2000，超过字符上限的回复会截断。
 - 短期上下文只在内存保存：每会话最多 100 条，模型最多接收最近 20 条历史且总输入不超过 8000 个 Unicode 字符；闲置 30 分钟清除，最多 500 个会话／5000 条记录。重启清空；群关闭立即清空，再开启从空历史开始。忙碌消息不排队、不入历史。
 - 只有 OneBot 明确确认发送成功的 AI 回复才进入后续历史。私聊按用户隔离，群聊由同群成员共享；模型不会收到 QQ 号。DEBUG 事件日志会隐藏 `raw_message` 和文本 segment 正文。
-- 人设可通过 `ECHOCORE_PERSONA_NAME`、`ECHOCORE_PERSONA_STYLE`、`ECHOCORE_PERSONA_GROUP_REPLY_LENGTH` 设置，默认分别为 `EchoCore`、`友善、诚实、自然、简洁`、`简短`；每项不能为空且最多 500 个字符，重启生效。
+- 人设首次导入可通过 `ECHOCORE_PERSONA_NAME`、`ECHOCORE_PERSONA_STYLE`、`ECHOCORE_PERSONA_GROUP_REPLY_LENGTH` 设置，默认分别为 `EchoCore`、`友善、诚实、自然、简洁`、`简短`；每项不能为空且最多 500 个字符，之后通过统一配置服务更新，新任务使用新值。
 - 空回复、超时和服务错误不会把内部错误发到 QQ；显式提问得到通用失败提示，普通群消息保持沉默。INFO 不记录对话正文、密钥或服务端错误正文。
 - 普通群候选可能各消耗一次判断请求，肯定判断再消耗一次生成请求；先在小测试群验证费用和体验，不要直接在高流量群启用。
 

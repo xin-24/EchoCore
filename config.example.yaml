@@ -1,5 +1,8 @@
 environment: "development"
 
+# 本 YAML 仅为说明，不自动加载。数据库路径属于启动环境配置。
+settings_db: "data/echocore.db" # ECHOCORE_SETTINGS_DB
+
 server:
   host: "127.0.0.1"
   port: 8080
@@ -11,12 +14,12 @@ onebot:
 bot:
   command_prefix: "/"
 
-# 此文件用于说明配置结构，运行时通过 ECHOCORE_GROUP_CONTROL_USER_IDS 读取白名单。
+# 首次导入从 ECHOCORE_GROUP_CONTROL_USER_IDS 读取白名单，之后以 SQLite 为准。
 group:
   control_user_ids: []
 
-# 仅作说明，运行时仍读取环境变量，不自动加载此 YAML。
-# 修改 Provider / 模型后需重启；不能同时启用或自动切换两个服务。
+# 首次导入读取环境变量；后续模型业务配置由统一配置服务保存并对新任务生效。
+# 当前只有内部服务接口，管理 HTTP 写入口和网页尚未开放。
 llm:
   provider: "disabled" # disabled / openai-compatible / ollama
   base_url: "" # 兼容 API 如 https://api.openai.com/v1；Ollama 如 http://127.0.0.1:11434
@@ -29,7 +32,7 @@ llm:
   max_input_chars: 4000
   max_reply_chars: 2000
 
-# 下列人设同样通过环境变量读取；修改后需重启服务。
+# 下列人设首次从环境变量导入；之后经统一配置服务更新，新任务使用新版本。
 persona:
   name: "EchoCore" # ECHOCORE_PERSONA_NAME，最多 500 字符
   style: "友善、诚实、自然、简洁" # ECHOCORE_PERSONA_STYLE，最多 500 字符

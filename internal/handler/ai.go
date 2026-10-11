@@ -10,10 +10,12 @@ const CommandAI = "/ai"
 // AI 处理群内启停命令，权限检查通过后才允许修改群状态。
 type AI struct {
 	states      *group.StateStore
-	permissions *group.Allowlist
+	permissions ControlPermissions
 }
 
-func NewAI(states *group.StateStore, permissions *group.Allowlist) *AI {
+type ControlPermissions interface{ CanControl(string) bool }
+
+func NewAI(states *group.StateStore, permissions ControlPermissions) *AI {
 	return &AI{states: states, permissions: permissions}
 }
 
