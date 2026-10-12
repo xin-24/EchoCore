@@ -36,13 +36,14 @@ func NewFakeLLM(options FakeOptions) (*FakeLLM, error) {
 	if options.Decision.Decision == "" {
 		options.Decision.Decision = DecisionIgnore
 	}
-	if options.Decision.Decision != DecisionIgnore && options.Decision.Decision != DecisionReply {
+	if options.Decision.Decision != DecisionIgnore && options.Decision.Decision != DecisionReply && options.Decision.Decision != DecisionUnclear {
 		return nil, fmt.Errorf("无效的 FakeLLM 判断结果：%q", options.Decision.Decision)
 	}
 	if options.DecideDelay < 0 || options.GenerateDelay < 0 {
 		return nil, fmt.Errorf("FakeLLM 延迟不能为负数")
 	}
 	options.Response = copyResponse(options.Response)
+	options.Decision = copyDecision(options.Decision)
 	return &FakeLLM{options: options}, nil
 }
 
@@ -63,7 +64,8 @@ func (f *FakeLLM) Requests() ([]DecideRequest, []GenerateRequest) {
 	defer f.requestMu.Unlock()
 	decide := make([]DecideRequest, len(f.decideRequests))
 	for i, request := range f.decideRequests {
-		decide[i] = DecideRequest{Input: cloneInput(request.Input)}
+		request.Input = cloneInput(request.Input)
+		decide[i] = request
 	}
 	generate := make([]GenerateRequest, len(f.generateRequests))
 	for i, request := range f.generateRequests {
@@ -85,7 +87,23 @@ func (f *FakeLLM) Decide(ctx context.Context, request DecideRequest) (DecideResp
 	if f.options.DecideError != nil {
 		return DecideResponse{}, f.options.DecideError
 	}
-	return f.options.Decision, nil
+	return copyDecision(f.options.Decision), nil
+}
+
+func copyDecision(r DecideResponse) DecideResponse {
+	if r.PrimaryUsage != nil {
+		v := *r.PrimaryUsage
+		r.PrimaryUsage = &v
+	}
+	if r.Confidence != nil {
+		v := *r.Confidence
+		r.Confidence = &v
+	}
+	if r.Usage != nil {
+		v := *r.Usage
+		r.Usage = &v
+	}
+	return r
 }
 
 // Generate 始终返回配置文本，不模拟 token 截断或语义理解。

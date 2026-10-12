@@ -1,9 +1,12 @@
-// Package settings 管理持久化业务配置和每轮任务使用的不可变运行快照。
+// Package settings 管理每轮任务使用的不可变运行快照。
+// 正常启动从 YAML 构造只读快照；旧 Repository 接口仅保留用于历史数据兼容。
 package settings
 
 import (
 	"context"
 	"errors"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,12 +17,14 @@ import (
 
 	"github.com/xin-24/EchoCore/internal/config"
 	"github.com/xin-24/EchoCore/internal/llm"
+	"github.com/xin-24/EchoCore/internal/participation"
 )
 
 var (
 	ErrConflict = errors.New("配置版本已变化，请重新读取后保存")
 	ErrBusy     = errors.New("存在在途任务，暂时不能修改全局并发上限")
 	ErrInvalid  = errors.New("业务配置无效")
+	ErrReadOnly = errors.New("启动配置为只读，请修改 YAML 文件并重启服务")
 )
 
 // Model 只持久化环境密钥引用；任何明文密钥都不能进入配置记录。
@@ -46,10 +51,12 @@ type Persona struct {
 }
 
 type Values struct {
-	Model          Model     `json:"model"`
-	Execution      Execution `json:"execution"`
-	Persona        Persona   `json:"persona"`
-	ControlUserIDs []string  `json:"control_user_ids"`
+	Jev            llm.JevConfig        `json:"jev"`
+	Participation  participation.Policy `json:"participation"`
+	Model          Model                `json:"model"`
+	Execution      Execution            `json:"execution"`
+	Persona        Persona              `json:"persona"`
+	ControlUserIDs []string             `json:"control_user_ids"`
 }
 
 type Record struct {
@@ -68,9 +75,10 @@ type Repository interface {
 type Compiler func(Model) (llm.Client, error)
 
 type snapshot struct {
-	record    Record
-	client    llm.Client
-	available bool
+	jevAvailable bool
+	record       Record
+	client       llm.Client
+	available    bool
 }
 
 // Lease 保证 Decide、Generate 和发送结束之前绑定同一配置版本。
@@ -84,12 +92,14 @@ type Lease struct {
 
 type View struct {
 	Record
+	JevAvailable   bool   `json:"jev_available"`
 	Source         string `json:"source"`
 	ModelAvailable bool   `json:"model_available"`
 	ActiveTasks    int    `json:"active_tasks"`
 }
 
 type Service struct {
+	source     string
 	repository Repository
 	compile    Compiler
 	current    atomic.Pointer[snapshot]
@@ -99,7 +109,32 @@ type Service struct {
 	resizing   bool
 }
 
-// Open 仅在空库调用 initial，避免旧环境配置覆盖数据库中的新设置。
+// New 构造文件配置的只读快照，不访问或保存数据库。
+func New(values Values, compile Compiler) (*Service, error) {
+	if err := Validate(values); err != nil {
+		return nil, err
+	}
+	if compile == nil {
+		compile = CompileModel
+	}
+	client, err := compile(values.Model)
+	if err != nil && !errors.Is(err, ErrMissingKey) {
+		return nil, err
+	}
+	if err != nil {
+		client = nil
+	}
+	client, jevAvailable, err := compileDecision(client, values.Jev, false)
+	if err != nil {
+		return nil, err
+	}
+	s := &Service{source: "yaml", compile: compile}
+	s.current.Store(&snapshot{record: Record{Revision: 1, UpdatedAt: time.Now(), Values: cloneValues(values)}, client: client, available: client != nil, jevAvailable: jevAvailable})
+	return s, nil
+}
+
+// Open 保留旧配置仓库兼容接口；正常服务启动不再使用它。
+// Deprecated: 启动配置应使用 New 从 YAML 创建只读快照。
 func Open(ctx context.Context, repository Repository, initial func() (Values, error), compile Compiler) (*Service, error) {
 	if compile == nil {
 		compile = CompileModel
@@ -135,8 +170,12 @@ func Open(ctx context.Context, repository Repository, initial func() (Values, er
 	if err != nil {
 		client = nil
 	}
-	s := &Service{repository: repository, compile: compile}
-	s.current.Store(&snapshot{record: cloneRecord(record), client: client, available: client != nil && err == nil})
+	client, jevAvailable, err := compileDecision(client, record.Values.Jev, false)
+	if err != nil {
+		return nil, err
+	}
+	s := &Service{repository: repository, compile: compile, source: "sqlite"}
+	s.current.Store(&snapshot{record: cloneRecord(record), client: client, available: client != nil, jevAvailable: jevAvailable})
 	return s, nil
 }
 
@@ -144,7 +183,7 @@ func (s *Service) View() View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current := s.current.Load()
-	return View{Record: cloneRecord(current.record), Source: "sqlite", ModelAvailable: current.available, ActiveTasks: s.active}
+	return View{Record: cloneRecord(current.record), Source: s.source, ModelAvailable: current.available, JevAvailable: current.jevAvailable, ActiveTasks: s.active}
 }
 
 func (s *Service) Acquire() Lease {
@@ -166,11 +205,18 @@ func (s *Service) Acquire() Lease {
 // Update 先提交数据库再原子发布；数据库等待不占用任务获取锁。
 // 修改并发上限的短暂窗口暂停接纳新模型任务，命令与收包继续工作。
 func (s *Service) Update(ctx context.Context, revision uint64, values Values) (View, error) {
+	if s.repository == nil {
+		return View{}, ErrReadOnly
+	}
 	values = cloneValues(values)
 	if err := Validate(values); err != nil {
 		return View{}, err
 	}
 	client, err := s.compile(values.Model)
+	if err != nil {
+		return View{}, err
+	}
+	client, jevAvailable, err := compileDecision(client, values.Jev, true)
 	if err != nil {
 		return View{}, err
 	}
@@ -195,12 +241,12 @@ func (s *Service) Update(ctx context.Context, revision uint64, values Values) (V
 	if err != nil {
 		return View{}, err
 	}
-	next := &snapshot{record: cloneRecord(record), client: client, available: client != nil}
+	next := &snapshot{record: cloneRecord(record), client: client, available: client != nil, jevAvailable: jevAvailable}
 	s.mu.Lock()
 	s.current.Store(next)
 	active := s.active
 	s.mu.Unlock()
-	return View{Record: cloneRecord(record), Source: "sqlite", ModelAvailable: next.available, ActiveTasks: active}, nil
+	return View{Record: cloneRecord(record), Source: "sqlite", ModelAvailable: next.available, JevAvailable: next.jevAvailable, ActiveTasks: active}, nil
 }
 
 func (s *Service) CanControl(userID string) bool {
@@ -230,10 +276,18 @@ func CompileModel(model Model) (llm.Client, error) {
 
 func FromConfig(cfg config.Config) Values {
 	source := "none"
-	if cfg.LLM.HTTP.APIKey != "" {
+	// 远端兼容 API 即使缺少密钥也保留引用，以便启动时明确停用而非报结构错误。
+	u, _ := url.Parse(cfg.LLM.HTTP.BaseURL)
+	remoteCompatible := false
+	if u != nil && cfg.LLM.HTTP.Provider == llm.ProviderCompatible {
+		ip := net.ParseIP(u.Hostname())
+		remoteCompatible = u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback())
+	}
+	if cfg.LLM.HTTP.APIKey != "" || remoteCompatible {
 		source = "environment"
 	}
 	return Values{
+		Jev: cfg.Jev, Participation: cfg.Participation,
 		Model:          Model{Provider: cfg.LLM.HTTP.Provider, BaseURL: cfg.LLM.HTTP.BaseURL, Name: cfg.LLM.HTTP.Model, TokenField: cfg.LLM.HTTP.TokenField, KeySource: source},
 		Execution:      Execution{TimeoutMS: cfg.LLM.Timeout.Milliseconds(), MaxConcurrent: cfg.LLM.MaxConcurrent, MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars},
 		Persona:        Persona{Name: cfg.Persona.Name, Style: cfg.Persona.Style, GroupReplyLength: cfg.Persona.GroupReplyLength},
@@ -243,6 +297,9 @@ func FromConfig(cfg config.Config) Values {
 
 // Validate 只做结构校验，不读环境密钥、不访问模型，也不在错误中返回输入值。
 func Validate(v Values) error {
+	if v.Jev.Validate() != nil || v.Participation.Validate() != nil {
+		return ErrInvalid
+	}
 	if v.Model.KeySource != "none" && v.Model.KeySource != "environment" {
 		return ErrInvalid
 	}

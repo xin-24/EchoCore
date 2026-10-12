@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,61 @@ import (
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/settings"
 )
+
+func TestLegacyJSONKeepsJevOffAndPersistsNewSettings(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	repo, err := OpenSettings(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	values := validValues()
+	if _, err = repo.Initialize(ctx, values); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(values)
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(payload, &raw)
+	delete(raw, "jev")
+	delete(raw, "participation")
+	payload, _ = json.Marshal(raw)
+	if _, err = repo.db.ExecContext(ctx, `UPDATE settings SET value_json=? WHERE id=1`, string(payload)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ECHOCORE_JEV_ENABLED", "true")
+	t.Setenv("ECHOCORE_JEV_API_KEY", "local-test-secret")
+	s, err := settings.Open(ctx, repo, func() (settings.Values, error) { t.Fatal("旧库不能再次导入环境"); return values, nil }, nil)
+	if err != nil || s.View().Values.Jev.Enabled {
+		t.Fatalf("旧库兼容失败：%v", err)
+	}
+	values = s.View().Values
+	values.Jev = llm.DefaultJevConfig()
+	values.Jev.Enabled = true
+	values.Participation.CooldownMS = 5000
+	if _, err = s.Update(ctx, 1, values); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenSettings(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	r, _, err := reopened.Load(ctx)
+	if err != nil || !r.Values.Jev.Enabled || r.Values.Participation.CooldownMS != 5000 {
+		t.Fatal("新配置重启丢失")
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bytes), "local-test-secret") {
+		t.Fatal("Jev 密钥不应入库")
+	}
+}
 
 func validValues() settings.Values {
 	return settings.FromConfig(config.Config{

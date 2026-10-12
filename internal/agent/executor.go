@@ -12,10 +12,12 @@ import (
 	"github.com/xin-24/EchoCore/internal/group"
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/message"
+	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/settings"
 )
 
 type ExecutorOptions struct {
+	Participation    participation.Policy
 	Timeout          time.Duration
 	MaxConcurrent    int
 	MaxOutputTokens  int
@@ -178,6 +180,13 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		}
 	}
 	var sentText string
+	decisionContext := llm.DecisionContext{BotName: options.PersonaName, Mentioned: incoming.Mentioned, Reference: "unknown"}
+	participationReason := ""
+	if contextKeyValid {
+		decisionContext, participationReason = e.contexts.DecisionSnapshot(contextKey, incoming, options.PersonaName, options.Participation, time.Now())
+	} else if options.Participation.CooldownMS > 0 || options.Participation.MaxReplies > 0 || options.Participation.RepeatWindowMS > 0 {
+		participationReason = "participation_state_unavailable"
+	}
 	work := message.Work{}
 	// 会话占用持续到发送结束；与只覆盖模型调用的全局执行槽分开释放。
 	work.Finish = sync.OnceFunc(func() {
@@ -211,9 +220,33 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		start := time.Now()
 		input := llm.Input{Text: inputText, History: history}
 		if !explicit {
-			decision, err := client.Decide(ctx, llm.DecideRequest{Input: input})
+			if participationReason != "" {
+				e.logger.Info("AI participation decided", "source", "policy", "decision", "ignore", "reason", participationReason, "group_id", incoming.GroupID, "config_revision", revision)
+				return message.OutgoingMessage{}, false
+			}
+			decision, err := client.Decide(ctx, llm.DecideRequest{Input: input, Context: decisionContext})
+			attrs := []any{"source", decision.Source, "decision", decision.Decision, "reason", decision.Reason, "fallback_reason", decision.FallbackReason, "group_id", incoming.GroupID, "config_revision", revision, "latency", time.Since(start)}
+			if llm.ValidConfidence(decision.Confidence) {
+				attrs = append(attrs, "confidence", *decision.Confidence)
+			}
+			if decision.Usage != nil {
+				attrs = append(attrs, "input_tokens", decision.Usage.InputTokens, "output_tokens", decision.Usage.OutputTokens)
+			}
+			if decision.PrimaryUsage != nil {
+				attrs = append(attrs, "jev_input_tokens", decision.PrimaryUsage.InputTokens, "jev_output_tokens", decision.PrimaryUsage.OutputTokens)
+			}
 			if err != nil {
-				return e.failed(parent, session, incoming, explicit, start)
+				attrs = append(attrs, "failed", true)
+			}
+			attrs = append(attrs, decision.PrimaryDiagnostic.LogFields("jev_")...)
+			attrs = append(attrs, decision.Diagnostic.LogFields("router_")...)
+			if err != nil || decision.Diagnostic.Kind != "" || decision.PrimaryDiagnostic.Kind != "" || decision.Reason == "fallback_error" {
+				e.logger.Warn("AI participation decided", attrs...)
+			} else {
+				e.logger.Info("AI participation decided", attrs...)
+			}
+			if err != nil {
+				return e.failed(parent, session, incoming, explicit, start, "decide", err)
 			}
 			if decision.Decision != llm.DecisionReply {
 				e.logger.Debug("LLM participation ignored", "group_id", incoming.GroupID)
@@ -226,7 +259,13 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		prompt := systemPrompt(options, incoming)
 		response, err := client.Generate(ctx, llm.GenerateRequest{Input: input, SystemPrompt: prompt, MaxOutputTokens: options.MaxOutputTokens})
 		if err != nil || ctx.Err() != nil || strings.TrimSpace(response.Text) == "" {
-			return e.failed(parent, session, incoming, explicit, start)
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			if err == nil {
+				err = llm.ErrInvalidResponse
+			}
+			return e.failed(parent, session, incoming, explicit, start, "generate", err)
 		}
 		if session != nil && session.Context().Err() != nil {
 			return message.OutgoingMessage{}, false
@@ -236,15 +275,21 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 			text = string([]rune(text)[:options.MaxReplyChars-1]) + "…"
 		}
 		sentText = text
-		e.logger.Info("LLM generation completed", "group_id", incoming.GroupID, "user_id", incoming.UserID, "latency", time.Since(start), "config_revision", revision)
+		attrs := []any{"group_id", incoming.GroupID, "user_id", incoming.UserID, "latency", time.Since(start), "config_revision", revision}
+		attrs = append(attrs, response.Diagnostic.LogFields("")...)
+		e.logger.Info("LLM generation completed", attrs...)
 		return replyFor(incoming, text), true
 	}
 	if contextKeyValid {
-		work.Sent = func(success bool) {
-			if success && (session == nil || session.Context().Err() == nil) {
-				e.contexts.AppendAssistant(contextKey, sentText, time.Now())
-			}
+		var delivered sync.Once
+		work.Delivered = func(result message.DeliveryResult) {
+			delivered.Do(func() {
+				if result.Success && (session == nil || session.Context().Err() == nil) {
+					e.contexts.AppendDelivered(contextKey, sentText, result.MessageID, time.Now(), incoming.IsGroup && !incoming.Mentioned)
+				}
+			})
 		}
+		work.Sent = func(success bool) { work.Delivered(message.DeliveryResult{Success: success}) }
 	}
 	handedOff = true
 	return work
@@ -290,6 +335,7 @@ func systemPrompt(options ExecutorOptions, incoming message.IncomingMessage) str
 }
 
 func optionsFromSettings(options ExecutorOptions, values settings.Values) ExecutorOptions {
+	options.Participation = values.Participation
 	options.Timeout = time.Duration(values.Execution.TimeoutMS) * time.Millisecond
 	options.MaxConcurrent = values.Execution.MaxConcurrent
 	options.MaxInputChars = values.Execution.MaxInputChars
@@ -301,12 +347,14 @@ func optionsFromSettings(options ExecutorOptions, values settings.Values) Execut
 	return options
 }
 
-func (e *Executor) failed(parent context.Context, session *group.Session, incoming message.IncomingMessage, explicit bool, start time.Time) (message.OutgoingMessage, bool) {
+func (e *Executor) failed(parent context.Context, session *group.Session, incoming message.IncomingMessage, explicit bool, start time.Time, stage string, err error) (message.OutgoingMessage, bool) {
 	if parent.Err() != nil || (session != nil && session.Context().Err() != nil) {
 		return message.OutgoingMessage{}, false
 	}
 	// 不记录 Provider 错误正文，防止第三方将密钥或原始对话放进错误消息。
-	e.logger.Warn("LLM request failed", "group_id", incoming.GroupID, "latency", time.Since(start))
+	attrs := []any{"group_id", incoming.GroupID, "stage", stage, "latency", time.Since(start)}
+	attrs = append(attrs, llm.Diagnose(err).LogFields("")...)
+	e.logger.Warn("LLM request failed", attrs...)
 	if explicit {
 		return replyFor(incoming, "暂时无法生成回复，请稍后再试。"), true
 	}

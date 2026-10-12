@@ -1,149 +1,167 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/xin-24/EchoCore/internal/llm"
 )
 
-func TestLoadDefaults(t *testing.T) {
-	t.Setenv("ECHOCORE_ENV", "")
-	t.Setenv("ECHOCORE_SERVER_HOST", "")
-	t.Setenv("ECHOCORE_SERVER_PORT", "")
-	t.Setenv("ECHOCORE_ONEBOT_PATH", "")
-	t.Setenv("ECHOCORE_ONEBOT_ACCESS_TOKEN", "")
-	t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", "")
-	t.Setenv("ECHOCORE_PERSONA_NAME", "")
-	t.Setenv("ECHOCORE_PERSONA_STYLE", "")
-	t.Setenv("ECHOCORE_PERSONA_GROUP_REPLY_LENGTH", "")
+func loadText(t *testing.T, text string) (Config, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return LoadFile(path)
+}
 
-	cfg, err := Load()
+func TestFileDefaults(t *testing.T) {
+	t.Setenv("ECHOCORE_LLM_API_KEY", "")
+	cfg, err := loadText(t, "{}")
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatal(err)
 	}
-	if got, want := cfg.Server.Address(), "127.0.0.1:8080"; got != want {
-		t.Fatalf("address = %q, want %q", got, want)
+	if cfg.Server.Address() != "127.0.0.1:8080" || cfg.Environment != EnvironmentDevelopment || cfg.OneBot.Path != "/onebot/v11/ws" {
+		t.Fatal("启动默认值错误")
 	}
-	if got, want := cfg.Environment, EnvironmentDevelopment; got != want {
-		t.Fatalf("environment = %q, want %q", got, want)
+	if cfg.LLM.HTTP.Provider != llm.ProviderDisabled || cfg.LLM.Timeout != 30*time.Second || cfg.LLM.MaxConcurrent != 4 {
+		t.Fatal("模型默认值错误")
 	}
-	if got, want := cfg.OneBot.Path, "/onebot/v11/ws"; got != want {
-		t.Fatalf("OneBot path = %q, want %q", got, want)
+	if cfg.Jev.Enabled || cfg.Jev.MinConfidence != .6 || cfg.Jev.TimeoutMS != 3000 || cfg.Participation.MaxReplies != 0 {
+		t.Fatal("Jev 和限额默认值错误")
 	}
-	if cfg.OneBot.AccessToken != "" {
-		t.Fatalf("OneBot access token = %q, want empty", cfg.OneBot.AccessToken)
-	}
-	if len(cfg.Group.ControlUserIDs) != 0 {
-		t.Fatal("默认群控制白名单应为空")
-	}
-	if cfg.Persona.Name != "EchoCore" || cfg.Persona.Style == "" || cfg.Persona.GroupReplyLength == "" {
-		t.Fatalf("人设默认值错误：%+v", cfg.Persona)
+	if cfg.Persona.Name != "EchoCore" || len(cfg.Group.ControlUserIDs) != 0 {
+		t.Fatal("人设或权限默认值错误")
 	}
 }
 
-func TestBootstrapIgnoresObsoleteBusinessEnvironment(t *testing.T) {
-	t.Setenv("ECHOCORE_ENV", "development")
-	t.Setenv("ECHOCORE_SERVER_PORT", "8080")
-	t.Setenv("ECHOCORE_ONEBOT_PATH", "/onebot/v11/ws")
-	t.Setenv("ECHOCORE_SETTINGS_DB", "data/custom.db")
-	t.Setenv("ECHOCORE_LLM_PROVIDER", "invalid-old-provider")
-	t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", "invalid-old-id")
-	cfg, err := LoadBootstrap()
-	if err != nil || cfg.SettingsDB != "data/custom.db" {
-		t.Fatalf("旧业务环境变量影响启动：%+v %v", cfg, err)
+func TestFileOverridesDefaultsAndIgnoresOldEnvironment(t *testing.T) {
+	for _, key := range []string{"ECHOCORE_ENV", "ECHOCORE_SERVER_HOST", "ECHOCORE_SERVER_PORT", "ECHOCORE_ONEBOT_PATH", "ECHOCORE_SETTINGS_DB", "ECHOCORE_GROUP_CONTROL_USER_IDS", "ECHOCORE_LLM_PROVIDER", "ECHOCORE_LLM_MODEL", "ECHOCORE_LLM_TIMEOUT", "ECHOCORE_JEV_MIN_CONFIDENCE", "ECHOCORE_PERSONA_NAME"} {
+		t.Setenv(key, "invalid-old-value")
 	}
-	if err := LoadInitialBusiness(&cfg); err == nil {
-		t.Fatal("首次导入时仍须校验环境业务配置")
-	}
-}
-
-func TestLoadPersonaValidation(t *testing.T) {
-	t.Setenv("ECHOCORE_PERSONA_NAME", "Echo")
-	t.Setenv("ECHOCORE_PERSONA_STYLE", "简洁友善")
-	t.Setenv("ECHOCORE_PERSONA_GROUP_REPLY_LENGTH", "简短")
-	cfg, err := Load()
-	if err != nil || cfg.Persona.Name != "Echo" {
-		t.Fatalf("人设环境变量加载失败：%+v, %v", cfg.Persona, err)
-	}
-	t.Setenv("ECHOCORE_PERSONA_STYLE", "   ")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ECHOCORE_PERSONA_STYLE") {
-		t.Fatalf("应拒绝空人设风格：%v", err)
-	}
-	t.Setenv("ECHOCORE_PERSONA_STYLE", strings.Repeat("名", 501))
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ECHOCORE_PERSONA_STYLE") {
-		t.Fatalf("应拒绝超长人设风格：%v", err)
-	}
-}
-
-func TestLoadFromEnvironment(t *testing.T) {
-	t.Setenv("ECHOCORE_ENV", "production")
-	t.Setenv("ECHOCORE_SERVER_HOST", "0.0.0.0")
-	t.Setenv("ECHOCORE_SERVER_PORT", "9090")
-	t.Setenv("ECHOCORE_ONEBOT_PATH", "/custom/ws")
-	t.Setenv("ECHOCORE_ONEBOT_ACCESS_TOKEN", "secret")
-	t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", "20001, 20002,20001")
-
-	cfg, err := Load()
+	t.Setenv("ECHOCORE_JEV_ENABLED", "false")
+	t.Setenv("ECHOCORE_LLM_API_KEY", "test-llm-secret")
+	t.Setenv("ECHOCORE_ONEBOT_ACCESS_TOKEN", "test-onebot-secret")
+	cfg, err := loadText(t, `environment: production
+server:
+  host: "::1"
+  port: 9090
+onebot:
+  path: /custom/ws
+group:
+  control_user_ids: ["20001", 20002, "20001"]
+llm:
+  provider: openai-compatible
+  base_url: https://example.test/v1
+  model: test-model
+  token_field: max_tokens
+  timeout: 45s
+jev:
+  enabled: true
+  min_confidence: 0
+participation:
+  cooldown_ms: 5000
+  window_ms: 60000
+  max_replies: 3
+persona:
+  name: 小回声
+`)
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatal(err)
 	}
-	if got, want := cfg.Server.Address(), "0.0.0.0:9090"; got != want {
-		t.Fatalf("address = %q, want %q", got, want)
-	}
-	if got, want := cfg.Environment, EnvironmentProduction; got != want {
-		t.Fatalf("environment = %q, want %q", got, want)
-	}
-	if got, want := cfg.OneBot.Path, "/custom/ws"; got != want {
-		t.Fatalf("OneBot path = %q, want %q", got, want)
-	}
-	if got, want := cfg.OneBot.AccessToken, "secret"; got != want {
-		t.Fatalf("OneBot access token = %q, want %q", got, want)
+	if cfg.Environment != EnvironmentProduction || cfg.Server.Address() != "[::1]:9090" || cfg.OneBot.Path != "/custom/ws" || cfg.OneBot.AccessToken != "test-onebot-secret" {
+		t.Fatal("启动配置未生效")
 	}
 	if !reflect.DeepEqual(cfg.Group.ControlUserIDs, []string{"20001", "20002"}) {
-		t.Fatalf("群控制白名单 = %v", cfg.Group.ControlUserIDs)
+		t.Fatal("白名单未归一化")
+	}
+	if cfg.LLM.HTTP.Model != "test-model" || cfg.LLM.HTTP.APIKey != "test-llm-secret" || cfg.LLM.Timeout != 45*time.Second || cfg.LLM.MaxConcurrent != 4 {
+		t.Fatal("模型覆盖或默认值错误")
+	}
+	if !cfg.Jev.Enabled || cfg.Jev.MinConfidence != 0 || cfg.Jev.TimeoutMS != 3000 || cfg.Participation.CooldownMS != 5000 || cfg.Persona.Name != "小回声" {
+		t.Fatal("业务覆盖或显式零值丢失")
 	}
 }
 
-func TestLoadGroupControlUserIDs(t *testing.T) {
-	t.Setenv("ECHOCORE_ENV", "development")
-	t.Setenv("ECHOCORE_SERVER_PORT", "8080")
-	t.Setenv("ECHOCORE_ONEBOT_PATH", "/onebot/v11/ws")
-	for _, value := range []string{"0", "-1", "+20001", "020001", "abc", "20001,", ",20001", "20001,,20002", "20001 20002", "9223372036854775808"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", value)
-			_, err := Load()
-			if err == nil || !strings.Contains(err.Error(), "ECHOCORE_GROUP_CONTROL_USER_IDS") {
-				t.Fatalf("Load() error = %v；应拒绝无效白名单", err)
+func TestFileRejectsInvalidConfiguration(t *testing.T) {
+	t.Setenv("ECHOCORE_LLM_API_KEY", "")
+	for _, text := range []string{
+		"", "[]", "server: [", "server: null", "server: &s {}", "server: {port: 8080, port: 8081}", "{}\n---\n{}", "{}\n---\n", "server: {prot: 8080}",
+		"environment: staging", "server: {port: 0}", "server: {port: 65536}", "server: {host: ''}",
+		"onebot: {path: relative}", "onebot: {path: '/ws?token=x'}", "onebot: {path: '/ws/{id}'}", "onebot: {path: '//ws'}",
+		"llm: {provider: invalid}", "llm: {provider: ollama, base_url: 'http://127.0.0.1:11434'}", "llm: {token_field: invalid}",
+		"llm: {timeout: 0s}", "llm: {timeout: 3m}", "llm: {max_concurrent: 33}", "llm: {max_concurrent: 0}",
+		"llm: {max_output_tokens: 16385}", "llm: {max_input_chars: 16001}", "llm: {max_reply_chars: 4001}",
+		"llm: {provider: ollama, base_url: 'http://example.test', model: test}",
+		"jev: {min_confidence: .nan}", "jev: {min_confidence: .inf}", "jev: {min_confidence: 1.1}", "jev: {enabled: true, timeout_ms: 0}", "jev: {timeout_ms: 10001}",
+		"participation: {cooldown_ms: -1}", "participation: {max_replies: 3}", "participation: {repeat_window_ms: 60001}",
+		"persona: {style: ' '}", "persona: {name: '" + strings.Repeat("名", 501) + "'}",
+		"settings_db: data/old.db", "bot: {command_prefix: '/'}",
+	} {
+		t.Run(text, func(t *testing.T) {
+			if _, err := loadText(t, text); err == nil {
+				t.Fatal("非法配置未被拒绝")
 			}
 		})
 	}
-	t.Setenv("ECHOCORE_GROUP_CONTROL_USER_IDS", " \t ")
-	cfg, err := Load()
-	if err != nil || len(cfg.Group.ControlUserIDs) != 0 {
-		t.Fatalf("空白配置应得到空白名单：%#v, %v", cfg.Group, err)
+	for _, id := range []string{"0", "-1", "+20001", "020001", "abc", "", "20001 20002", "9223372036854775808"} {
+		if _, err := loadText(t, "group: {control_user_ids: ['"+id+"']}"); err == nil {
+			t.Fatalf("非法 QQ 号未被拒绝：%q", id)
+		}
 	}
 }
 
-func TestLoadRejectsInvalidPort(t *testing.T) {
-	t.Setenv("ECHOCORE_SERVER_PORT", "70000")
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() error = nil, want an invalid port error")
+func TestSecretsCannotBeLoadedFromFileOrLeakedInErrors(t *testing.T) {
+	const secret = "do-not-print-this-secret"
+	for _, text := range []string{
+		"llm: {api_key: '" + secret + "'}", "jev: {api_key: '" + secret + "'}", "onebot: {access_token: '" + secret + "'}",
+		"server: {port: '" + secret + "'}", "llm: {base_url: 'https://user:" + secret + "@example.test'}",
+	} {
+		_, err := loadText(t, text)
+		if err == nil || strings.Contains(err.Error(), secret) {
+			t.Fatal("密钥字段未拒绝或错误泄露输入")
+		}
 	}
 }
 
-func TestLoadRejectsInvalidOneBotPath(t *testing.T) {
-	t.Setenv("ECHOCORE_ONEBOT_PATH", "onebot/v11/ws")
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() error = nil, want an invalid OneBot path error")
+func TestFileReadAndRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), "config.example.yaml") {
+		t.Fatal("缺失文件应给出操作提示")
+	}
+	if err := os.WriteFile(path, []byte("server: {port: 8081}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("server: {port: 8082}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := LoadFile(path)
+	if err != nil || first.Server.Port != 8081 || second.Server.Port != 8082 {
+		t.Fatal("重新加载没有使用新文件")
+	}
+	if err := os.WriteFile(path, []byte(strings.Repeat(" ", 128*1024+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("超大文件应拒绝")
 	}
 }
 
-func TestLoadRejectsInvalidEnvironment(t *testing.T) {
-	t.Setenv("ECHOCORE_ENV", "staging")
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() error = nil, want an invalid environment error")
+func TestExampleIsRunnableAndMissingKeysAreNotStructuralErrors(t *testing.T) {
+	t.Setenv("ECHOCORE_LLM_API_KEY", "")
+	if _, err := LoadFile("../../config.example.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadText(t, "llm: {provider: openai-compatible, base_url: 'https://example.test/v1', model: test}\njev: {enabled: true}"); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,13 +22,14 @@ import (
 	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/settings"
-	"github.com/xin-24/EchoCore/internal/storage"
 )
 
 const shutdownTimeout = 5 * time.Second
 
 func main() {
-	cfg, err := config.LoadBootstrap()
+	configPath := flag.String("config", "config.yaml", "YAML 配置文件路径")
+	flag.Parse()
+	cfg, configuration, err := loadConfiguration(*configPath)
 	if err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("configuration error", "error", err)
 		os.Exit(1)
@@ -36,26 +38,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	repository, err := storage.OpenSettings(ctx, cfg.SettingsDB)
-	if err != nil {
-		logger.Error("settings database initialization failed", "error", err)
-		os.Exit(1)
-	}
-	defer repository.Close()
-	configuration, err := settings.Open(ctx, repository, func() (settings.Values, error) {
-		initial := cfg
-		if err := config.LoadInitialBusiness(&initial); err != nil {
-			return settings.Values{}, err
-		}
-		return settings.FromConfig(initial), nil
-	}, nil)
-	if err != nil {
-		logger.Error("settings initialization failed", "error", err)
-		_ = repository.Close()
-		os.Exit(1)
-	}
 	view := configuration.View()
-	logger.Info("business settings loaded", "source", view.Source, "revision", view.Revision, "provider", view.Values.Model.Provider, "model_available", view.ModelAvailable)
+	logger.Info("business settings loaded", "source", view.Source, "revision", view.Revision, "provider", view.Values.Model.Provider, "model_available", view.ModelAvailable, "jev_enabled", view.Values.Jev.Enabled, "jev_available", view.JevAvailable)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Address(),
@@ -92,6 +76,16 @@ func main() {
 	}
 
 	logger.Info("EchoCore stopped")
+}
+
+// loadConfiguration 不打开数据库：所有启动配置来自指定 YAML 和环境密钥。
+func loadConfiguration(path string) (config.Config, *settings.Service, error) {
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	service, err := settings.New(settings.FromConfig(cfg), nil)
+	return cfg, service, err
 }
 
 func newHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context, clients ...llm.Client) http.Handler {

@@ -1,43 +1,55 @@
-environment: "development"
-
-# 本 YAML 仅为说明，不自动加载。数据库路径属于启动环境配置。
-settings_db: "data/echocore.db" # ECHOCORE_SETTINGS_DB
+# 复制为 config.yaml 后修改。读取顺序：代码默认值 → 本文件；修改后重启生效。
+# API Key、OneBot Token 只能放在环境变量，不能填写在 YAML 中。
+# 旧 SQLite 配置和旧非密钥环境变量不再参与启动配置。
+environment: development # development：彩色 Console；production：JSON
 
 server:
   host: "127.0.0.1"
   port: 8080
 
 onebot:
-  path: "/onebot/v11/ws"
-  access_token: ""
+  path: "/onebot/v11/ws" # 修改后同步更新 NapCat 的反向 WebSocket 地址
+  # 可选鉴权密钥：ECHOCORE_ONEBOT_ACCESS_TOKEN，与 NapCat 配置一致
 
-bot:
-  command_prefix: "/"
-
-# 首次导入从 ECHOCORE_GROUP_CONTROL_USER_IDS 读取白名单，之后以 SQLite 为准。
 group:
-  control_user_ids: []
+  control_user_ids: [] # 有权使用 /ai on/off 的个人 QQ 号，例如 ["20001", "20002"]
 
-# 首次导入读取环境变量；后续模型业务配置由统一配置服务保存并对新任务生效。
-# 当前只有内部服务接口，管理 HTTP 写入口和网页尚未开放。
 llm:
-  provider: "disabled" # disabled / openai-compatible / ollama
-  base_url: "" # 兼容 API 如 https://api.openai.com/v1；Ollama 如 http://127.0.0.1:11434
-  model: "" # 填写服务商可用或本机已安装的模型名称，不设硬编码默认模型
-  # 密钥只通过 ECHOCORE_LLM_API_KEY 配置，不写入文件。
-  token_field: "max_completion_tokens" # 兼容服务若只支持旧字段，改为 max_tokens
-  timeout: "30s" # 判断与生成共用的总期限，最大 2m
-  max_concurrent: 4 # 服务级并发上限，同群额外限制为一个在途模型任务
+  provider: disabled # disabled / openai-compatible / ollama
+  base_url: "" # 填原服务商的 API 根地址；本机 Ollama 通常为 http://127.0.0.1:11434
+  model: "" # 填原来可用的模型名称；启用 Provider 后必须配置
+  # 密钥：ECHOCORE_LLM_API_KEY；本机无鉴权服务可以不设置
+  token_field: max_completion_tokens # 服务商要求旧字段时改为 max_tokens
+  timeout: 30s # 判断和生成共享的总期限，1ms～2m
+  max_concurrent: 4 # 全局并发上限 1～32；同会话仍只允许一个在途任务
   max_output_tokens: 512
   max_input_chars: 4000
   max_reply_chars: 2000
 
-# 下列人设首次从环境变量导入；之后经统一配置服务更新，新任务使用新版本。
-persona:
-  name: "EchoCore" # ECHOCORE_PERSONA_NAME，最多 500 字符
-  style: "友善、诚实、自然、简洁" # ECHOCORE_PERSONA_STYLE，最多 500 字符
-  group_reply_length: "简短" # ECHOCORE_PERSONA_GROUP_REPLY_LENGTH，最多 500 字符
+jev:
+  proxy_url: "" # 可选，如 socks5h://127.0.0.1:7897；仅影响 Jev，禁止内嵌账号密码
+  enabled: false # 开启会向额外服务发送有限上下文；仍需启用上面的生成模型
+  base_url: "https://openrouter.ai/api/alpha"
+  path: "/decisions" # 独立 Decisions API，不是聊天接口
+  model: "~typesafe/jev-latest"
+  min_confidence: 0.60 # 0～1；低于阈值回退到原模型判断
+  timeout_ms: 3000 # 开启时为 1～10000；超时且整轮未取消则回退
+  # 独立密钥：ECHOCORE_JEV_API_KEY，上述 OpenRouter 地址对应 OpenRouter API Key。
+  # 若密钥来自 TypeSafe，必须同时改为以下三项，不能混用平台：
+  # base_url: "https://api.typesafe.ai/v1"
+  # path: "/systemone"
+  # model: "jev-latest"
 
-# 短期上下文为内存默认策略，不由此文件加载或配置：闲置 30 分钟过期，
-# 每会话最多 100 条；模型使用最近 20 条，总输入预算 8000 个 Unicode 字符。
-# 服务重启或群内 /ai off 后清空；不会写入数据库或常规日志。
+participation:
+  cooldown_ms: 0 # 普通群消息回复冷却，0 关闭，最多 3600000
+  window_ms: 0 # 回复计数窗口，最多 3600000
+  max_replies: 0 # 窗口内最多自动回复数；0 关闭，启用必须设置 window_ms，最多 1000
+  repeat_window_ms: 0 # 同用户连续重复文字过滤窗口；0 关闭，最多 60000
+
+persona:
+  name: "EchoCore"
+  style: "友善、诚实、自然、简洁"
+  group_reply_length: "简短"
+
+# 群开关、短期上下文和参与计数仍在内存，重启清空，不写数据库。
+# 短期上下文仍采用代码默认限额；当前 YAML 不支持 context 等额外字段。

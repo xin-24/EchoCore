@@ -93,11 +93,11 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		actionRequests.Wait()
 	}()
 	// 模型任务与 Action 等待分别占用资源，模型慢请求不阻塞收包或命令。
-	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool)) {
+	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool), delivered func(message.DeliveryResult)) {
 		select {
 		case actionSlots <- struct{}{}:
 			defer func() { <-actionSlots }()
-			sendReplyWithCompletion(readCtx, logger, sender, outgoing, guard, finish, sent)
+			sendReplyWithCompletion(readCtx, logger, sender, outgoing, guard, finish, sent, delivered)
 		default:
 			logger.Warn("OneBot reply skipped because action queue is full")
 		}
@@ -149,7 +149,7 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				outgoing, handled := work.Execute(readCtx)
 				if handled {
-					submitReply(outgoing, work.Guard, work.Finish, work.Sent)
+					submitReply(outgoing, work.Guard, work.Finish, work.Sent, work.Delivered)
 				}
 			}(work)
 			continue
@@ -276,10 +276,10 @@ func sendReplyGuarded(ctx context.Context, logger *slog.Logger, sender *ActionSe
 	sendReplyWithCompletion(ctx, logger, sender, outgoing, guard, nil, nil)
 }
 
-func sendReplyWithCompletion(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool)) {
+func sendReplyWithCompletion(ctx context.Context, logger *slog.Logger, sender *ActionSender, outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool), delivered ...func(message.DeliveryResult)) {
 	requestCtx, cancel := context.WithTimeout(ctx, actionResponseTimeout)
 	defer cancel()
-	action, response, err := sender.sendGuarded(requestCtx, outgoing, guard, finish, sent)
+	action, response, err := sender.sendGuarded(requestCtx, outgoing, guard, finish, sent, delivered...)
 	attributes := []any{
 		"action", action.Action,
 		"echo", string(action.Echo),

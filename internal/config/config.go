@@ -1,18 +1,14 @@
+// Package config 从 YAML 加载非密钥启动参数，环境变量仅提供密钥。
 package config
 
 import (
 	"fmt"
 	"net"
-	"os"
 	"strconv"
-	"strings"
-)
+	"time"
 
-const (
-	defaultHost        = "127.0.0.1"
-	defaultPort        = 8080
-	defaultOneBotPath  = "/onebot/v11/ws"
-	defaultEnvironment = EnvironmentDevelopment
+	"github.com/xin-24/EchoCore/internal/llm"
+	"github.com/xin-24/EchoCore/internal/participation"
 )
 
 type Environment string
@@ -23,125 +19,52 @@ const (
 )
 
 type Config struct {
-	Environment Environment
-	Server      Server
-	OneBot      OneBot
-	Group       Group
-	LLM         LLM
-	Persona     Persona
-	SettingsDB  string
+	Jev           llm.JevConfig
+	Participation participation.Policy
+	Environment   Environment
+	Server        Server
+	OneBot        OneBot
+	Group         Group
+	LLM           LLM
+	Persona       Persona
 }
 
 type Persona struct{ Name, Style, GroupReplyLength string }
-
-type Group struct {
-	ControlUserIDs []string
-}
-
+type Group struct{ ControlUserIDs []string }
 type Server struct {
 	Host string
 	Port int
 }
-
-type OneBot struct {
-	Path        string
-	AccessToken string
-}
-
-func Load() (Config, error) {
-	cfg, err := LoadBootstrap()
-	if err != nil {
-		return Config{}, err
-	}
-	if err := LoadInitialBusiness(&cfg); err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
-}
-
-// LoadBootstrap 仅读取启动参数；已有数据库时不再校验或覆盖旧业务环境变量。
-func LoadBootstrap() (Config, error) {
-	environment := Environment(strings.ToLower(envOrDefault("ECHOCORE_ENV", string(defaultEnvironment))))
-	if environment != EnvironmentDevelopment && environment != EnvironmentProduction {
-		return Config{}, fmt.Errorf("ECHOCORE_ENV must be development or production")
-	}
-
-	host := envOrDefault("ECHOCORE_SERVER_HOST", defaultHost)
-	portValue := envOrDefault("ECHOCORE_SERVER_PORT", strconv.Itoa(defaultPort))
-
-	port, err := strconv.Atoi(portValue)
-	if err != nil || port < 1 || port > 65535 {
-		return Config{}, fmt.Errorf("ECHOCORE_SERVER_PORT must be an integer between 1 and 65535")
-	}
-
-	oneBotPath := envOrDefault("ECHOCORE_ONEBOT_PATH", defaultOneBotPath)
-	if !strings.HasPrefix(oneBotPath, "/") || strings.ContainsAny(oneBotPath, "?#") {
-		return Config{}, fmt.Errorf("ECHOCORE_ONEBOT_PATH must be an absolute URL path without a query or fragment")
-	}
-
-	return Config{
-		Environment: environment,
-		Server:      Server{Host: host, Port: port},
-		OneBot:      OneBot{Path: oneBotPath, AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN")},
-		SettingsDB:  envOrDefault("ECHOCORE_SETTINGS_DB", "data/echocore.db"),
-	}, nil
-}
-
-// LoadInitialBusiness 只在首次导入环境业务配置时调用，不保存任何密钥明文。
-func LoadInitialBusiness(cfg *Config) error {
-	controlUserIDs, err := parseControlUserIDs(os.Getenv("ECHOCORE_GROUP_CONTROL_USER_IDS"))
-	if err != nil {
-		return err
-	}
-	model, err := loadLLM()
-	if err != nil {
-		return err
-	}
-	persona := Persona{
-		Name:             envOrDefault("ECHOCORE_PERSONA_NAME", "EchoCore"),
-		Style:            envOrDefault("ECHOCORE_PERSONA_STYLE", "友善、诚实、自然、简洁"),
-		GroupReplyLength: envOrDefault("ECHOCORE_PERSONA_GROUP_REPLY_LENGTH", "简短"),
-	}
-	for key, value := range map[string]string{"ECHOCORE_PERSONA_NAME": persona.Name, "ECHOCORE_PERSONA_STYLE": persona.Style, "ECHOCORE_PERSONA_GROUP_REPLY_LENGTH": persona.GroupReplyLength} {
-		if strings.TrimSpace(value) == "" || len([]rune(value)) > 500 {
-			return fmt.Errorf("%s 不能为空且最多 500 个字符", key)
-		}
-	}
-
-	cfg.Group = Group{ControlUserIDs: controlUserIDs}
-	cfg.LLM = model
-	cfg.Persona = persona
-	return nil
-}
-
-// parseControlUserIDs 校验并去重逗号分隔的 QQ 号；未配置时默认拒绝所有启停操作。
-func parseControlUserIDs(value string) ([]string, error) {
-	if strings.TrimSpace(value) == "" {
-		return nil, nil
-	}
-	var ids []string
-	seen := make(map[string]struct{})
-	for _, item := range strings.Split(value, ",") {
-		id := strings.TrimSpace(item)
-		number, err := strconv.ParseInt(id, 10, 64)
-		if err != nil || number <= 0 || strconv.FormatInt(number, 10) != id {
-			return nil, fmt.Errorf("ECHOCORE_GROUP_CONTROL_USER_IDS must contain comma-separated positive QQ IDs without leading zeros")
-		}
-		if _, exists := seen[id]; !exists {
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
+type OneBot struct{ Path, AccessToken string }
+type LLM struct {
+	HTTP            llm.HTTPOptions
+	Timeout         time.Duration
+	MaxConcurrent   int
+	MaxOutputTokens int
+	MaxInputChars   int
+	MaxReplyChars   int
 }
 
 func (s Server) Address() string {
 	return net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
 }
 
-func envOrDefault(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok && value != "" {
-		return value
+// normalizeIDs 去重但不修正非法账号，避免白名单因输入错误授予意外权限。
+func normalizeIDs(ids []string) ([]string, error) {
+	if len(ids) > 1000 {
+		return nil, fmt.Errorf("group.control_user_ids 最多 1000 项")
 	}
-	return fallback
+	result := make([]string, 0, len(ids))
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || n <= 0 || strconv.FormatInt(n, 10) != id {
+			return nil, fmt.Errorf("group.control_user_ids 必须为不含前导零的正整数 QQ 号")
+		}
+		if !seen[id] {
+			result = append(result, id)
+			seen[id] = true
+		}
+	}
+	return result, nil
 }

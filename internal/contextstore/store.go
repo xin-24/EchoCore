@@ -38,10 +38,15 @@ type Record struct {
 }
 
 type window struct {
-	records    []Record
-	seen       map[string]struct{}
-	lastActive time.Time
-	active     bool
+	lastReply        time.Time
+	automaticReplies []time.Time
+	lastInputHash    [32]byte
+	lastInputSender  string
+	lastInputAt      time.Time
+	records          []Record
+	seen             map[string]struct{}
+	lastActive       time.Time
+	active           bool
 }
 
 // Store 在锁内完成追加与快照，调用方取得的 llm.Message 切片独立于内部存储。
@@ -140,6 +145,11 @@ func (s *Store) AppendUser(key Key, in message.IncomingMessage, active bool) ([]
 
 // AppendAssistant 仅由发送成功回执触发，并拒绝已失效的群开启周期。
 func (s *Store) AppendAssistant(key Key, text string, timestamp time.Time) {
+	s.AppendDelivered(key, text, "", timestamp, false)
+}
+
+// AppendDelivered 在成功回执时保存回复、发送消息 ID 与参与状态。
+func (s *Store) AppendDelivered(key Key, text, messageID string, timestamp time.Time, automatic bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -154,10 +164,25 @@ func (s *Store) AppendAssistant(key Key, text string, timestamp time.Time) {
 		timestamp = now
 	}
 	w.lastActive = now
-	w.records = append(w.records, Record{Sequence: s.sequence, Role: string(llm.RoleAssistant), SenderID: key.SelfID, Text: text, Timestamp: timestamp, Truncated: truncated})
+	w.lastReply = timestamp
+	w.trimReplies(now)
+	if automatic {
+		w.automaticReplies = append(w.automaticReplies, timestamp)
+		if len(w.automaticReplies) > 1000 {
+			w.automaticReplies = append([]time.Time(nil), w.automaticReplies[len(w.automaticReplies)-1000:]...)
+		}
+	}
+	w.records = append(w.records, Record{Sequence: s.sequence, MessageID: messageID, Role: string(llm.RoleAssistant), SenderID: key.SelfID, Text: text, Timestamp: timestamp, Truncated: truncated})
 	if len(w.records) > maxMessagesPerSession {
 		w.records = append([]Record(nil), w.records[len(w.records)-maxMessagesPerSession:]...)
 		w.rebuildSeen()
+	}
+	// 助手回写也必须执行总容量清理，不能依赖下一条用户消息。
+	for s.totalRecords() > maxMessagesTotal {
+		if !s.evictOldest(key) {
+			w.records = w.records[1:]
+			w.rebuildSeen()
+		}
 	}
 }
 
