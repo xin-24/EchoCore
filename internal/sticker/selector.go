@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/xin-24/EchoCore/internal/llm"
+	"github.com/xin-24/EchoCore/internal/tools"
 )
 
 // Library 可由本地目录或未来的收藏表情适配器实现。
@@ -47,12 +48,13 @@ func (s Selector) Generate(ctx context.Context, g llm.Generator, request llm.Gen
 	}
 	original := request
 	request.SystemPrompt += expressionPrompt
-	request.Tools = stickerTools()
 	allowed := map[string]bool{}
 	seenCalls := map[string]bool{}
 	var usage llm.Usage
 	usageKnown := true
 	var plan Plan
+	registry := s.registry(allowed, &plan)
+	request.Tools = registry.Definitions()
 	finish := func() Plan {
 		if usageKnown {
 			u := usage
@@ -100,38 +102,51 @@ func (s Selector) Generate(ctx context.Context, g llm.Generator, request llm.Gen
 			return finish(), nil
 		}
 		seenCalls[call.ID] = true
-		result := `{"error":"invalid_tool_or_arguments"}`
-		switch call.Name {
-		case "list_stickers":
-			var args struct {
-				Query *string `json:"query"`
-			}
-			if strictArgs(call.Arguments, &args) && args.Query != nil && utf8.RuneCountInString(*args.Query) <= 64 {
-				candidates := s.Library.Search(*args.Query, s.Config.MaxCandidates)
-				for _, candidate := range candidates {
-					allowed[candidate.ID] = true
-				}
-				payload, _ := json.Marshal(map[string]any{"candidates": candidates})
-				result = string(payload)
-			}
-		case "select_sticker":
-			var args struct {
-				ID   *string `json:"id"`
-				Text *string `json:"text"`
-			}
-			if strictArgs(call.Arguments, &args) && args.ID != nil && args.Text != nil && validID.MatchString(*args.ID) && utf8.RuneCountInString(*args.Text) <= 4000 {
-				plan.Text = strings.TrimSpace(*args.Text)
-				if allowed[*args.ID] {
-					plan.StickerID, plan.Reason = *args.ID, "selected"
-					return finish(), nil
-				}
-				result = `{"error":"sticker_not_listed"}`
-			}
+		result := registry.Execute(ctx, call)
+		if result.Final {
+			return finish(), nil
 		}
-		request.ToolHistory = append(request.ToolHistory, llm.ToolTurn{Role: "assistant", Text: response.Text, Calls: response.ToolCalls, Continuation: response.Continuation}, llm.ToolTurn{Role: "tool", CallID: call.ID, Text: result})
+		request.ToolHistory = append(request.ToolHistory, llm.ToolTurn{Role: "assistant", Text: response.Text, Calls: response.ToolCalls, Continuation: response.Continuation}, llm.ToolTurn{Role: "tool", CallID: call.ID, Text: result.Content})
 	}
 	plan.Reason = "tool_limit"
 	return finish(), nil
+}
+
+// registry 为每轮创建独立的候选授权集，不共享模型输入或账号状态。
+func (s Selector) registry(allowed map[string]bool, plan *Plan) *tools.Registry {
+	r := &tools.Registry{}
+	defs := stickerTools()
+	invalid := tools.Result{Content: `{"error":"invalid_tool_or_arguments"}`}
+	_ = r.Register(defs[0], func(_ context.Context, raw string) tools.Result {
+		var args struct {
+			Query *string `json:"query"`
+		}
+		if !strictArgs(raw, &args) || args.Query == nil || utf8.RuneCountInString(*args.Query) > 64 {
+			return invalid
+		}
+		candidates := s.Library.Search(*args.Query, s.Config.MaxCandidates)
+		for _, candidate := range candidates {
+			allowed[candidate.ID] = true
+		}
+		payload, _ := json.Marshal(map[string]any{"candidates": candidates})
+		return tools.Result{Content: string(payload)}
+	})
+	_ = r.Register(defs[1], func(_ context.Context, raw string) tools.Result {
+		var args struct {
+			ID   *string `json:"id"`
+			Text *string `json:"text"`
+		}
+		if !strictArgs(raw, &args) || args.ID == nil || args.Text == nil || !validID.MatchString(*args.ID) || utf8.RuneCountInString(*args.Text) > 4000 {
+			return invalid
+		}
+		plan.Text = strings.TrimSpace(*args.Text)
+		if !allowed[*args.ID] {
+			return tools.Result{Content: `{"error":"sticker_not_listed"}`}
+		}
+		plan.StickerID, plan.Reason = *args.ID, "selected"
+		return tools.Result{Final: true}
+	})
+	return r
 }
 
 func strictArgs(raw string, dst any) bool {

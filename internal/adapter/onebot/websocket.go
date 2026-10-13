@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/xin-24/EchoCore/internal/message"
 	onebotprotocol "github.com/xin-24/EchoCore/internal/onebot"
+	"github.com/xin-24/EchoCore/internal/sticker"
 )
 
 const (
@@ -34,12 +35,19 @@ type messagePreparer interface {
 // WebSocketHandler 接收 NapCat 建立的 OneBot 11 反向 WebSocket 连接。
 // 它记录完整的 OneBot JSON 数据帧、分发支持的消息命令，并通过同一连接发送回复。
 type WebSocketHandler struct {
-	logger      *slog.Logger
-	shutdown    context.Context
-	accessToken string
-	adapter     *Adapter
-	dispatcher  messageDispatcher
-	nextID      atomic.Uint64
+	logger           *slog.Logger
+	shutdown         context.Context
+	accessToken      string
+	adapter          *Adapter
+	dispatcher       messageDispatcher
+	nextID           atomic.Uint64
+	favorites        *sticker.Service
+	favoriteInterval time.Duration
+}
+
+func (h *WebSocketHandler) WithFavorites(service *sticker.Service, interval time.Duration) *WebSocketHandler {
+	h.favorites, h.favoriteInterval = service, interval
+	return h
 }
 
 func NewWebSocketHandler(
@@ -90,8 +98,17 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	actionSlots := make(chan struct{}, maxConcurrentActionRequests)
 	defer func() {
 		cancelRead()
+		sender.Close()
 		actionRequests.Wait()
 	}()
+	var favoriteAccount atomic.Value
+	if h.favorites != nil {
+		actionRequests.Add(1)
+		go func() {
+			defer actionRequests.Done()
+			runFavorites(readCtx, sender, h.favorites, h.favoriteInterval, &favoriteAccount, logger)
+		}()
+	}
 	// 模型任务与 Action 等待分别占用资源，模型慢请求不阻塞收包或命令。
 	submitReply := func(outgoing message.OutgoingMessage, guard func(func() error) error, finish func(), sent func(bool), delivered func(message.DeliveryResult)) {
 		select {
@@ -122,6 +139,15 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		logFrame(logger, messageType, payload)
+		if account, ok := favoriteAccount.Load().(string); ok {
+			var identity struct {
+				SelfID json.Number `json:"self_id"`
+			}
+			if json.Unmarshal(payload, &identity) == nil && identity.SelfID != "" && string(identity.SelfID) != account {
+				logger.Warn("OneBot account changed; reconnect required")
+				return
+			}
+		}
 		if handleActionResponse(logger, sender, payload) {
 			continue
 		}
@@ -352,6 +378,14 @@ func redactMessageContent(payload []byte) []byte {
 	var value any
 	if json.Unmarshal(payload, &value) != nil {
 		return payload
+	}
+	// Action 数据可能是收藏签名地址或其他敏感返回值，日志只保留响应信封。
+	if envelope, ok := value.(map[string]any); ok && envelope["post_type"] == nil && envelope["status"] != nil {
+		for _, key := range []string{"data", "message", "wording"} {
+			if _, exists := envelope[key]; exists {
+				envelope[key] = "[已隐藏]"
+			}
+		}
 	}
 	var redact func(any)
 	redact = func(item any) {

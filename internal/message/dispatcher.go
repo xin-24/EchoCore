@@ -14,6 +14,23 @@ type ArgumentHandler interface {
 	HandleArguments(IncomingMessage, []string) OutgoingMessage
 }
 
+// WorkHandler 将需要 IO 的管理命令移出 WebSocket 读取循环。
+type WorkHandler interface {
+	Handler
+	Prepare(IncomingMessage) Work
+}
+
+func (d *Dispatcher) Prepare(incoming IncomingMessage) Work {
+	fields := strings.Fields(incoming.Text)
+	if len(fields) > 0 && (!incoming.IsGroup || incoming.Mentioned) {
+		if h, ok := d.handlers[fields[0]].(WorkHandler); ok {
+			return h.Prepare(incoming)
+		}
+	}
+	reply, ok := d.Dispatch(incoming)
+	return Work{Reply: reply, HasReply: ok}
+}
+
 // Dispatcher 将支持的命令分发给对应的 Handler。
 type Dispatcher struct {
 	handlers map[string]Handler

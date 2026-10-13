@@ -54,6 +54,41 @@ go run ./cmd/server -config /absolute/path/config.yaml
 
 快照保留每轮任务的模型、人设、白名单和执行限额一致性，但不再把它当作可编辑的数据库配置。文件模式调用内部 `settings.Service.Update` 会返回只读错误；请修改文件并重启。群开关、短期上下文和参与计数仍在内存，重启清空。
 
+## QQ 收藏表情（可选）
+
+本地图片表情之外，现在支持读取机器人当前 QQ 账号的收藏。新素材默认待批准，没有描述或缓存不可用时不会交给模型。只读收藏，不会添加、删除或修改 QQ 收藏本身。
+
+在现有 `config.yaml` 中开启 `stickers.enabled`，并增加（不要重复创建已有 YAML 段）：
+
+```yaml
+qq_stickers:
+  enabled: true
+  directory: "data/qq-stickers"
+  count: 48
+  sync_interval_ms: 0
+  cache_mib: 128
+  allowed_hosts: []
+```
+
+若只使用 QQ 收藏，不必创建本地 `catalog.yaml`；已有本地素材库仍可备用。修改启动配置后重启 Go。账号就绪后会自动查询；收藏详情接口不支持时保留纯文字/本地素材能力，不尝试猜测其他返回结构。
+
+使用 `group.control_user_ids` 中的个人 QQ 号，**私聊**机器人：
+
+1. `/stickers status`：查看同步数量、错误分类及资源主机。首次域名名单为空，图片下载失败是预期的安全行为，元数据仍会保留。
+2. 核验资源主机后，将需要的精确域名填入 `qq_stickers.allowed_hosts`，例如 `['你实际核验的域名']`，重启后再次同步。禁止填 URL、通配符或账号密码。只允许 HTTPS 443 和公网地址；HTTP 或不支持类型会被拒绝，不会偷偷放宽安全策略。
+3. `/stickers sync`：请求后台刷新；`/stickers list 1`：每页查看 10 项及素材 ID。
+4. `/stickers label ID 猫猫大笑 | 开心、好笑时使用`：补充或覆盖本地名称、描述，不回写 QQ。
+5. `/stickers approve ID`：批准使用。**批准代表允许此机器人所有可回复会话使用该素材**。应先确认缓存成功与内容合适；资源内容变化会撤销原审批。
+6. `/stickers disable ID`：立即停用；`/stickers forget ID`：删除本地记录及可回收缓存，不删除 QQ 收藏。再次同步会重新进入待批准状态。
+
+文字模型依据描述选图，不会自动看懂图片。工具仍是 `list_stickers` → `select_sticker` → 统一发送，每轮最多一张；只有发送成功才记录历史与冷却。群聊仍需 `/ai on`，Jev / Router 仍决定普通群消息是否值得参与。
+
+运行数据保存在配置目录下的 SQLite 和图片缓存，默认单图最多 2 MiB、总图片缓存 128 MiB、元数据最多 500 项、有效期 24 小时；过期后不再选用。查询次数受 `count` 限制，不承诺得到全部收藏，不根据单次列表缺项判断已删除。默认仅账号就绪与手动刷新，也可设置 `sync_interval_ms` 为 60000～86400000。不要让多个服务进程共用同一缓存目录。
+
+`/stickers status` 的 `query_failed` 表示查询失败，`partial_download_failure` 表示部分图片被拒绝或下载失败；检查域名、HTTPS、文件大小及 NapCat 版本。日志不记录签名 URL、图片字节或 API Key。该功能沿用 OneBot Token，不需要新的 LLM Key 或 NapCat WebUI 登录密钥。
+
+已通过离线及模拟协议测试；真实 QQ 收藏字段、静态图显示与 GIF 播放仍需用自己的账号手动验收。当前未自动开启本机功能、读取真实收藏或发送测试消息。
+
 ## NapCat 反向 WebSocket
 
 1. 启动 EchoCore：

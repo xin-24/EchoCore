@@ -18,6 +18,7 @@ import (
 )
 
 type ExecutorOptions struct {
+	StickerSnapshots sticker.SnapshotProvider
 	Stickers         sticker.Config
 	StickerLibrary   sticker.Library
 	Participation    participation.Policy
@@ -184,6 +185,7 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 	}
 	var sentText string
 	var sentStickerID string
+	var stickerLibrary sticker.Library
 	decisionContext := llm.DecisionContext{BotName: options.PersonaName, Mentioned: incoming.Mentioned, Reference: "unknown"}
 	participationReason := ""
 	if contextKeyValid {
@@ -213,6 +215,11 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		check := func() error {
 			if sentStickerID != "" && !e.contexts.StickerAllowed(contextKey, sentStickerID, time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, time.Duration(options.Stickers.RepeatWindowMS)*time.Millisecond) {
 				return context.Canceled
+			}
+			if sentStickerID != "" {
+				if guarded, ok := stickerLibrary.(sticker.GuardedLibrary); ok {
+					return guarded.Guard(sentStickerID, send)
+				}
 			}
 			return send()
 		}
@@ -279,9 +286,13 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		var response llm.GenerateResponse
 		var plan sticker.Plan
 		var err error
-		useStickers := options.Stickers.Enabled && options.StickerLibrary != nil && contextKeyValid && e.contexts.StickerAllowed(contextKey, "", time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, 0)
+		stickerLibrary = options.StickerLibrary
+		if options.StickerSnapshots != nil {
+			stickerLibrary = options.StickerSnapshots.Snapshot(incoming.SelfID)
+		}
+		useStickers := options.Stickers.Enabled && stickerLibrary != nil && contextKeyValid && e.contexts.StickerAllowed(contextKey, "", time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, 0)
 		if useStickers {
-			plan, err = (sticker.Selector{Library: options.StickerLibrary, Config: options.Stickers}).Generate(ctx, client, request)
+			plan, err = (sticker.Selector{Library: stickerLibrary, Config: options.Stickers}).Generate(ctx, client, request)
 			response = llm.GenerateResponse{Text: plan.Text, Usage: plan.Usage, Diagnostic: plan.Diagnostic}
 			e.logger.Info("Sticker reply planned", "reason", plan.Reason, "sticker_id", plan.StickerID)
 		} else {
@@ -308,7 +319,7 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		if plan.StickerID != "" {
 			allowed := e.contexts.StickerAllowed(contextKey, plan.StickerID, time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, time.Duration(options.Stickers.RepeatWindowMS)*time.Millisecond)
 			if allowed {
-				candidate, data, resolveErr := options.StickerLibrary.Resolve(plan.StickerID)
+				candidate, data, resolveErr := stickerLibrary.Resolve(plan.StickerID)
 				if resolveErr == nil && sticker.ValidImage(data) {
 					outgoing.Image = &message.Image{ID: candidate.ID, Name: candidate.Name, Data: data}
 					sentStickerID = candidate.ID

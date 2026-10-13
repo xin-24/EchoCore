@@ -97,6 +97,9 @@ func (r *Router) prepare(incoming message.IncomingMessage, allowAI bool) message
 		r.logger.Info("Router message routed", attrs...)
 	}
 	if result.Kind == RouteCommand {
+		if allowAI {
+			return r.commands.Prepare(result.Message)
+		}
 		reply, handled := r.commands.Dispatch(result.Message)
 		return message.Work{Reply: reply, HasReply: handled}
 	}

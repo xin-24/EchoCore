@@ -20,16 +20,18 @@ const (
 )
 
 type Config struct {
-	Stickers       sticker.Config
-	StickerCatalog *sticker.Catalog
-	Jev            llm.JevConfig
-	Participation  participation.Policy
-	Environment    Environment
-	Server         Server
-	OneBot         OneBot
-	Group          Group
-	LLM            LLM
-	Persona        Persona
+	Favorites       sticker.FavoritesConfig
+	FavoriteService *sticker.Service
+	Stickers        sticker.Config
+	StickerCatalog  *sticker.Catalog
+	Jev             llm.JevConfig
+	Participation   participation.Policy
+	Environment     Environment
+	Server          Server
+	OneBot          OneBot
+	Group           Group
+	LLM             LLM
+	Persona         Persona
 }
 
 type Persona struct{ Name, Style, GroupReplyLength string }

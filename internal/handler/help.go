@@ -4,7 +4,7 @@ import "github.com/xin-24/EchoCore/internal/message"
 
 const (
 	CommandHelp = "/help"
-	HelpText    = "可用命令：\n/ping - 回复 pong\n/help - 显示此帮助\n/ai on - 开启本群 AI 参与开关（仅白名单）\n/ai off - 关闭本群 AI 参与开关（仅白名单）\n私聊直接发送消息即可与 AI 对话。群命令需要 @机器人；AI 开关默认关闭，服务重启后关闭。"
+	HelpText    = "可用命令：\n/ping - 回复 pong\n/help - 显示此帮助\n/ai on - 开启本群 AI 参与开关（仅白名单）\n/ai off - 关闭本群 AI 参与开关（仅白名单）\n/stickers - 收藏管理（仅白名单私聊）\n私聊直接发送消息即可与 AI 对话。群命令需要 @机器人；AI 开关默认关闭，服务重启后关闭。"
 )
 
 type Help struct{}

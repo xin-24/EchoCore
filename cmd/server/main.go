@@ -39,6 +39,18 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if cfg.Favorites.Enabled {
+		var local sticker.Library
+		if cfg.StickerCatalog.Len() > 0 {
+			local = cfg.StickerCatalog
+		}
+		cfg.FavoriteService, err = sticker.OpenFavorites(cfg.Favorites, local)
+		if err != nil {
+			logger.Error("收藏缓存初始化失败", "error", err)
+			os.Exit(1)
+		}
+		defer cfg.FavoriteService.Close()
+	}
 	view := configuration.View()
 	logger.Info("sticker settings loaded", "enabled", cfg.Stickers.Enabled, "available", cfg.StickerCatalog.Len(), "max_tool_rounds", cfg.Stickers.MaxToolRounds)
 	logger.Info("business settings loaded", "source", view.Source, "revision", view.Revision, "provider", view.Values.Model.Provider, "model_available", view.ModelAvailable, "jev_enabled", view.Values.Jev.Enabled, "jev_available", view.JevAvailable)
@@ -116,11 +128,16 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 	}
 	if client != nil || configuration != nil {
 		var library sticker.Library
+		var snapshots sticker.SnapshotProvider
+		if cfg.FavoriteService != nil {
+			snapshots = cfg.FavoriteService
+		}
 		if cfg.StickerCatalog.Len() > 0 {
 			library = cfg.StickerCatalog
 		}
 		executor = agent.NewExecutor(client, groupStates, logger, agent.ExecutorOptions{
-			Stickers: cfg.Stickers, StickerLibrary: library,
+			StickerSnapshots: snapshots,
+			Stickers:         cfg.Stickers, StickerLibrary: library,
 			Timeout: cfg.LLM.Timeout, MaxConcurrent: cfg.LLM.MaxConcurrent,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars,
 			ContextStore: contexts, PersonaName: cfg.Persona.Name, PersonaStyle: cfg.Persona.Style,
@@ -132,6 +149,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		handler.NewPing(),
 		handler.NewHelp(),
 		handler.NewAI(groupStates, groupPermissions),
+		handler.NewStickers(cfg.FavoriteService, groupPermissions),
 	)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -143,7 +161,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		shutdown,
 		cfg.OneBot.AccessToken,
 		agent.NewRouter(groupStates, dispatcher, logger, executor),
-	))
+	).WithFavorites(cfg.FavoriteService, time.Duration(cfg.Favorites.SyncIntervalMS)*time.Millisecond))
 
 	return mux
 }

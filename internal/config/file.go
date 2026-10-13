@@ -20,8 +20,9 @@ import (
 
 // fileConfig 刻意不定义任何密钥字段；误把密钥写入 YAML 会被拒绝。
 type fileConfig struct {
-	Stickers    sticker.Config `yaml:"stickers"`
-	Environment Environment    `yaml:"environment"`
+	Favorites   sticker.FavoritesConfig `yaml:"qq_stickers"`
+	Stickers    sticker.Config          `yaml:"stickers"`
+	Environment Environment             `yaml:"environment"`
 	Server      struct {
 		Host string `yaml:"host"`
 		Port int    `yaml:"port"`
@@ -68,6 +69,7 @@ type fileConfig struct {
 func defaults() fileConfig {
 	var f fileConfig
 	f.Stickers = sticker.DefaultConfig()
+	f.Favorites = sticker.DefaultFavoritesConfig()
 	f.Environment = EnvironmentDevelopment
 	f.Server.Host, f.Server.Port = "127.0.0.1", 8080
 	f.OneBot.Path = "/onebot/v11/ws"
@@ -105,10 +107,17 @@ func LoadFile(path string) (Config, error) {
 		if !filepath.IsAbs(cfg.Stickers.Directory) {
 			cfg.Stickers.Directory = filepath.Join(filepath.Dir(path), cfg.Stickers.Directory)
 		}
-		cfg.StickerCatalog, err = sticker.Load(cfg.Stickers.Directory)
+		// QQ 来源可独立使用；缺少本地清单时不强制创建空文件。
+		_, manifestErr := os.Stat(filepath.Join(cfg.Stickers.Directory, "catalog.yaml"))
+		if !(cfg.Favorites.Enabled && errors.Is(manifestErr, os.ErrNotExist)) {
+			cfg.StickerCatalog, err = sticker.Load(cfg.Stickers.Directory)
+		}
 		if err != nil {
 			return Config{}, err
 		}
+	}
+	if !filepath.IsAbs(cfg.Favorites.Directory) {
+		cfg.Favorites.Directory = filepath.Join(filepath.Dir(path), cfg.Favorites.Directory)
 	}
 	return cfg, nil
 }
@@ -146,6 +155,12 @@ func plainNode(n *yaml.Node) bool {
 }
 
 func (f fileConfig) config() (Config, error) {
+	if err := f.Favorites.Validate(); err != nil {
+		return Config{}, err
+	}
+	if f.Favorites.Enabled && !f.Stickers.Enabled {
+		return Config{}, errors.New("启用 qq_stickers 前必须启用 stickers.enabled")
+	}
 	if err := f.Stickers.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -207,6 +222,7 @@ func (f fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
+		Favorites:   f.Favorites,
 		Stickers:    f.Stickers,
 		Environment: f.Environment, Server: Server{Host: f.Server.Host, Port: f.Server.Port},
 		OneBot: OneBot{Path: f.OneBot.Path, AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN")}, Group: Group{ControlUserIDs: ids},

@@ -59,5 +59,14 @@ persona:
   style: "友善、诚实、自然、简洁"
   group_reply_length: "简短"
 
+qq_stickers:
+  enabled: false # 启用前还需 stickers.enabled: true；不会自动批准任何收藏
+  directory: "data/qq-stickers" # SQLite 运行数据与图片缓存，相对配置文件
+  count: 48 # 单次读取 1～500 项，不承诺全量或分页
+  sync_interval_ms: 0 # 0 表示仅账号就绪与手动刷新；可设 60000～86400000
+  cache_mib: 128 # 图片缓存上限 2～1024 MiB；单图仍最多 2 MiB
+  allowed_hosts: [] # 先同步查看 /stickers status 的资源主机，再填入核验过的精确域名
+  # 仅允许 HTTPS 443 与公网地址，不支持通配符，不使用 LLM/OneBot 密钥下载图片。
+
 # 群开关、短期上下文和参与计数仍在内存，重启清空，不写数据库。
 # 短期上下文仍采用代码默认限额；当前 YAML 不支持 context 等额外字段。

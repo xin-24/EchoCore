@@ -31,23 +31,28 @@ type actionWriter interface {
 // ActionSender 将 EchoCore 回复转换为 OneBot Action，并写入反向 WebSocket 连接。
 // 写入操作会被串行执行，使后续 Handler 能够安全地并发发送回复。
 type ActionSender struct {
-	delivered map[string]func(message.DeliveryResult)
-	writer    actionWriter
-	writeMu   sync.Mutex
-	pendingMu sync.Mutex
-	pending   map[string]chan onebotprotocol.ActionResponse
-	completed map[string]func()
-	sent      map[string]func(bool)
-	nextEcho  atomic.Uint64
+	delivered  map[string]func(message.DeliveryResult)
+	writer     actionWriter
+	writeMu    sync.Mutex
+	pendingMu  sync.Mutex
+	pending    map[string]chan onebotprotocol.ActionResponse
+	completed  map[string]func()
+	sent       map[string]func(bool)
+	nextEcho   atomic.Uint64
+	done       chan struct{}
+	closeOnce  sync.Once
+	querySlots chan struct{}
 }
 
 func NewActionSender(writer actionWriter) *ActionSender {
 	return &ActionSender{
-		delivered: make(map[string]func(message.DeliveryResult)),
-		writer:    writer,
-		pending:   make(map[string]chan onebotprotocol.ActionResponse),
-		completed: make(map[string]func()),
-		sent:      make(map[string]func(bool)),
+		delivered:  make(map[string]func(message.DeliveryResult)),
+		writer:     writer,
+		pending:    make(map[string]chan onebotprotocol.ActionResponse),
+		completed:  make(map[string]func()),
+		sent:       make(map[string]func(bool)),
+		done:       make(chan struct{}),
+		querySlots: make(chan struct{}, 8),
 	}
 }
 
@@ -70,9 +75,13 @@ func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.Outgoin
 	if err != nil {
 		return onebotprotocol.Action{}, onebotprotocol.ActionResponse{}, err
 	}
+	return s.executeAction(ctx, action, guard, completed, sent, delivered...)
+}
 
+func (s *ActionSender) executeAction(ctx context.Context, action onebotprotocol.Action, guard func(func() error) error, completed func(), sent func(bool), delivered ...func(message.DeliveryResult)) (onebotprotocol.Action, onebotprotocol.ActionResponse, error) {
 	echo := fmt.Sprintf("echocore-%d", s.nextEcho.Add(1))
-	action.Echo, err = json.Marshal(echo)
+	encoded, err := json.Marshal(echo)
+	action.Echo = encoded
 	if err != nil {
 		return onebotprotocol.Action{}, onebotprotocol.ActionResponse{}, fmt.Errorf("marshal OneBot echo: %w", err)
 	}
@@ -90,6 +99,11 @@ func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.Outgoin
 
 	s.writeMu.Lock()
 	write := func() error {
+		select {
+		case <-s.done:
+			return ErrDisconnected
+		default:
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -108,6 +122,8 @@ func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.Outgoin
 	select {
 	case response := <-responses:
 		return finishAction(action, response)
+	case <-s.done:
+		return action, onebotprotocol.ActionResponse{}, ErrDisconnected
 	case <-ctx.Done():
 		// 响应和超时同时发生时优先使用已经到达的响应。
 		select {
@@ -123,6 +139,11 @@ func (s *ActionSender) sendGuarded(ctx context.Context, outgoing message.Outgoin
 // 找不到对应请求或 echo 无效时返回 false。
 // 生命周期回调在等待表锁内快速执行，不得重新调用 Sender 的方法。
 func (s *ActionSender) Resolve(response onebotprotocol.ActionResponse) bool {
+	select {
+	case <-s.done:
+		return false
+	default:
+	}
 	key, err := echoKey(response.Echo)
 	if err != nil {
 		return false
