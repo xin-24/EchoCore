@@ -115,8 +115,30 @@ func (c *HTTPClient) Decide(ctx context.Context, request DecideRequest) (DecideR
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Reasoning  string         `json:"reasoning_content,omitempty"`
+}
+
+type wireToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+func wireCalls(calls []ToolCall) []wireToolCall {
+	out := make([]wireToolCall, 0, len(calls))
+	for _, call := range calls {
+		w := wireToolCall{ID: call.ID, Type: "function"}
+		w.Function.Name, w.Function.Arguments = call.Name, call.Arguments
+		out = append(out, w)
+	}
+	return out
 }
 
 func (c *HTTPClient) Generate(ctx context.Context, request GenerateRequest) (GenerateResponse, error) {
@@ -132,25 +154,47 @@ func (c *HTTPClient) deepSeekDecision() bool {
 }
 
 func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deciding bool) (GenerateResponse, error) {
+	if len(request.Tools) > 0 && c.options.Provider != ProviderCompatible {
+		return GenerateResponse{}, ErrToolsUnsupported
+	}
+	if len(request.Tools) > 8 || len(request.ToolHistory) > 32 {
+		return GenerateResponse{}, ErrInvalidResponse
+	}
 	if strings.TrimSpace(request.Input.Text) == "" || request.MaxOutputTokens < 0 {
 		return GenerateResponse{}, errors.New("模型输入为空或输出限制无效")
 	}
 	messages := []chatMessage{}
 	if request.SystemPrompt != "" {
-		messages = append(messages, chatMessage{"system", request.SystemPrompt})
+		messages = append(messages, chatMessage{Role: "system", Content: request.SystemPrompt})
 	}
 	for _, item := range request.Input.History {
 		if item.Role != RoleUser && item.Role != RoleAssistant {
 			return GenerateResponse{}, errors.New("历史消息角色无效")
 		}
-		messages = append(messages, chatMessage{string(item.Role), item.Text})
+		messages = append(messages, chatMessage{Role: string(item.Role), Content: item.Text})
 	}
-	messages = append(messages, chatMessage{"user", request.Input.Text})
+	messages = append(messages, chatMessage{Role: "user", Content: request.Input.Text})
+	for _, turn := range request.ToolHistory {
+		if turn.Role != "assistant" && turn.Role != "tool" {
+			return GenerateResponse{}, ErrInvalidResponse
+		}
+		messages = append(messages, chatMessage{Role: turn.Role, Content: turn.Text, ToolCalls: wireCalls(turn.Calls), ToolCallID: turn.CallID, Reasoning: turn.Continuation})
+	}
 	limit := request.MaxOutputTokens
 	if limit == 0 {
 		limit = 512
 	}
 	body := map[string]any{"model": c.options.Model, "messages": messages, "stream": false}
+	if len(request.Tools) > 0 {
+		tools := make([]any, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			if !json.Valid(tool.Schema) {
+				return GenerateResponse{}, ErrInvalidResponse
+			}
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": tool.Name, "description": tool.Description, "parameters": tool.Schema}})
+		}
+		body["tools"], body["tool_choice"], body["parallel_tool_calls"] = tools, "auto", false
+	}
 	path := "/chat/completions"
 	if c.options.Provider == ProviderOllama {
 		path = "/api/chat"
@@ -182,6 +226,10 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		// 首次工具请求被兼容服务拒绝时允许上层退回纯文字；鉴权、限流等错误不重试。
+		if len(request.Tools) > 0 && len(request.ToolHistory) == 0 && (response.StatusCode == 400 || response.StatusCode == 422) {
+			return GenerateResponse{}, ErrToolsUnsupported
+		}
 		return GenerateResponse{}, statusFailure(response.StatusCode)
 	}
 	data, err = io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
@@ -194,8 +242,9 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 	var wire struct {
 		Choices []struct {
 			Message struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []wireToolCall `json:"tool_calls"`
+				Content          string         `json:"content"`
+				ReasoningContent string         `json:"reasoning_content"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -241,6 +290,22 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 			return result, failure("invalid_schema", ErrInvalidResponse, result.Diagnostic)
 		}
 		result.Text = wire.Choices[0].Message.Content
+		calls := wire.Choices[0].Message.ToolCalls
+		if len(calls) > 0 {
+			if len(request.Tools) == 0 || len(calls) > 4 || wire.Choices[0].FinishReason != "tool_calls" {
+				return result, failure("invalid_schema", ErrInvalidResponse, result.Diagnostic)
+			}
+			seen := map[string]bool{}
+			for _, call := range calls {
+				if call.Type != "function" || call.ID == "" || len(call.ID) > 128 || seen[call.ID] || len(call.Function.Name) > 64 || len(call.Function.Arguments) > 2048 {
+					return result, failure("invalid_schema", ErrInvalidResponse, result.Diagnostic)
+				}
+				seen[call.ID] = true
+				result.ToolCalls = append(result.ToolCalls, ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
+			}
+			// 思考模式的工具调用需原样回传续传字段，但不写入持久历史或日志。
+			result.Continuation = wire.Choices[0].Message.ReasoningContent
+		}
 		result.Diagnostic.FinishReason = wire.Choices[0].FinishReason
 		result.Diagnostic.ReasoningPresent = strings.TrimSpace(wire.Choices[0].Message.ReasoningContent) != ""
 		if u := wire.Usage; u != nil {
@@ -260,7 +325,7 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 		return result, failure("content_filtered", ErrInvalidResponse, result.Diagnostic)
 	}
 	result.Text = strings.TrimSpace(result.Text)
-	if result.Text == "" {
+	if result.Text == "" && len(result.ToolCalls) == 0 {
 		kind := "empty_content"
 		if result.Diagnostic.FinishReason == "length" {
 			kind = "output_limit"

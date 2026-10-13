@@ -46,6 +46,14 @@ participation:
   max_replies: 0 # 窗口内最多自动回复数；0 关闭，启用必须设置 window_ms，最多 1000
   repeat_window_ms: 0 # 同用户连续重复文字过滤窗口；0 关闭，最多 60000
 
+stickers:
+  enabled: false # 素材准备完成后开启；首版支持 OpenAI 兼容 Provider 的工具调用
+  directory: "data/stickers" # 相对于本配置文件，目录中需有 catalog.yaml
+  max_candidates: 8 # 每次查询 1～20 项
+  max_tool_rounds: 4 # 每轮回复最多 1～6 次生成请求；均受 llm.timeout 限制
+  cooldown_ms: 60000 # 每会话图片冷却；0 关闭，上限 3600000
+  repeat_window_ms: 300000 # 避免重复上一张表情；0 关闭，上限 3600000
+
 persona:
   name: "EchoCore"
   style: "友善、诚实、自然、简洁"

@@ -3,6 +3,7 @@ package onebot
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,12 +14,14 @@ import (
 	"github.com/coder/websocket"
 	"github.com/xin-24/EchoCore/internal/message"
 	onebotprotocol "github.com/xin-24/EchoCore/internal/onebot"
+	"github.com/xin-24/EchoCore/internal/sticker"
 )
 
 var (
 	ErrUnsupportedPlatform = errors.New("unsupported outgoing message platform")
 	ErrInvalidTarget       = errors.New("invalid outgoing message target")
 	ErrActionFailed        = errors.New("OneBot action failed")
+	ErrInvalidImage        = errors.New("无效的图片回复内容")
 )
 
 type actionWriter interface {
@@ -261,6 +264,18 @@ func buildAction(outgoing message.OutgoingMessage) (onebotprotocol.Action, error
 				Data: onebotprotocol.SegmentData{"text": outgoing.Text},
 			},
 		},
+	}
+	if outgoing.Image != nil {
+		img := outgoing.Image
+		if !sticker.ValidImage(img.Data) {
+			return onebotprotocol.Action{}, ErrInvalidImage
+		}
+		segments := []onebotprotocol.MessageSegment{}
+		if outgoing.Text != "" {
+			segments = append(segments, onebotprotocol.MessageSegment{Type: onebotprotocol.SegmentTypeText, Data: onebotprotocol.SegmentData{"text": outgoing.Text}})
+		}
+		segments = append(segments, onebotprotocol.MessageSegment{Type: onebotprotocol.SegmentTypeImage, Data: onebotprotocol.SegmentData{"file": "base64://" + base64.StdEncoding.EncodeToString(img.Data), "sub_type": 1, "summary": img.Name}})
+		params["message"] = segments
 	}
 
 	if outgoing.GroupID != "" {

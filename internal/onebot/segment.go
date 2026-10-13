@@ -4,6 +4,7 @@ package onebot
 type SegmentType string
 
 const (
+	SegmentTypeImage SegmentType = "image"
 	SegmentTypeText  SegmentType = "text"
 	SegmentTypeAt    SegmentType = "at"
 	SegmentTypeReply SegmentType = "reply"

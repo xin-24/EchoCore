@@ -286,6 +286,9 @@ func sendReplyWithCompletion(ctx context.Context, logger *slog.Logger, sender *A
 		"status", response.Status,
 		"retcode", response.RetCode,
 	}
+	if outgoing.Image != nil {
+		attributes = append(attributes, "sticker_id", outgoing.Image.ID)
+	}
 	if outgoing.GroupID != "" {
 		attributes = append(attributes, "group_id", outgoing.GroupID)
 	} else {

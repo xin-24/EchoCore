@@ -9,6 +9,7 @@ import (
 
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/participation"
+	"github.com/xin-24/EchoCore/internal/sticker"
 )
 
 type Environment string
@@ -19,14 +20,16 @@ const (
 )
 
 type Config struct {
-	Jev           llm.JevConfig
-	Participation participation.Policy
-	Environment   Environment
-	Server        Server
-	OneBot        OneBot
-	Group         Group
-	LLM           LLM
-	Persona       Persona
+	Stickers       sticker.Config
+	StickerCatalog *sticker.Catalog
+	Jev            llm.JevConfig
+	Participation  participation.Policy
+	Environment    Environment
+	Server         Server
+	OneBot         OneBot
+	Group          Group
+	LLM            LLM
+	Persona        Persona
 }
 
 type Persona struct{ Name, Style, GroupReplyLength string }

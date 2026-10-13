@@ -7,18 +7,21 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/participation"
+	"github.com/xin-24/EchoCore/internal/sticker"
 	"gopkg.in/yaml.v3"
 )
 
 // fileConfig 刻意不定义任何密钥字段；误把密钥写入 YAML 会被拒绝。
 type fileConfig struct {
-	Environment Environment `yaml:"environment"`
+	Stickers    sticker.Config `yaml:"stickers"`
+	Environment Environment    `yaml:"environment"`
 	Server      struct {
 		Host string `yaml:"host"`
 		Port int    `yaml:"port"`
@@ -64,6 +67,7 @@ type fileConfig struct {
 
 func defaults() fileConfig {
 	var f fileConfig
+	f.Stickers = sticker.DefaultConfig()
 	f.Environment = EnvironmentDevelopment
 	f.Server.Host, f.Server.Port = "127.0.0.1", 8080
 	f.OneBot.Path = "/onebot/v11/ws"
@@ -93,7 +97,20 @@ func LoadFile(path string) (Config, error) {
 	if err != nil || len(data) > maxBytes {
 		return Config{}, errors.New("配置文件读取失败或超过 128 KiB")
 	}
-	return decode(data)
+	cfg, err := decode(data)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.Stickers.Enabled {
+		if !filepath.IsAbs(cfg.Stickers.Directory) {
+			cfg.Stickers.Directory = filepath.Join(filepath.Dir(path), cfg.Stickers.Directory)
+		}
+		cfg.StickerCatalog, err = sticker.Load(cfg.Stickers.Directory)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	return cfg, nil
 }
 
 func decode(data []byte) (Config, error) {
@@ -129,6 +146,9 @@ func plainNode(n *yaml.Node) bool {
 }
 
 func (f fileConfig) config() (Config, error) {
+	if err := f.Stickers.Validate(); err != nil {
+		return Config{}, err
+	}
 	if f.Environment != EnvironmentDevelopment && f.Environment != EnvironmentProduction {
 		return Config{}, errors.New("environment 必须为 development 或 production")
 	}
@@ -187,6 +207,7 @@ func (f fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
+		Stickers:    f.Stickers,
 		Environment: f.Environment, Server: Server{Host: f.Server.Host, Port: f.Server.Port},
 		OneBot: OneBot{Path: f.OneBot.Path, AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN")}, Group: Group{ControlUserIDs: ids},
 		LLM:     LLM{HTTP: http, Timeout: timeout, MaxConcurrent: f.LLM.MaxConcurrent, MaxOutputTokens: f.LLM.MaxOutputTokens, MaxInputChars: f.LLM.MaxInputChars, MaxReplyChars: f.LLM.MaxReplyChars},

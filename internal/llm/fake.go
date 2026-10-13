@@ -11,6 +11,8 @@ import (
 // FakeOptions 配置固定输出与可选故障，不读取环境变量、不访问网络。
 // 默认忽略；生成结果允许为空，用于测试 Executor 的空回复保护。
 type FakeOptions struct {
+	// Responses 按当前请求的工具轮次返回结果，不共享跨会话游标。
+	Responses     []GenerateResponse
 	Decision      DecideResponse
 	Response      GenerateResponse
 	DecideError   error
@@ -43,6 +45,10 @@ func NewFakeLLM(options FakeOptions) (*FakeLLM, error) {
 		return nil, fmt.Errorf("FakeLLM 延迟不能为负数")
 	}
 	options.Response = copyResponse(options.Response)
+	options.Responses = append([]GenerateResponse(nil), options.Responses...)
+	for i := range options.Responses {
+		options.Responses[i] = copyResponse(options.Responses[i])
+	}
 	options.Decision = copyDecision(options.Decision)
 	return &FakeLLM{options: options}, nil
 }
@@ -69,8 +75,7 @@ func (f *FakeLLM) Requests() ([]DecideRequest, []GenerateRequest) {
 	}
 	generate := make([]GenerateRequest, len(f.generateRequests))
 	for i, request := range f.generateRequests {
-		request.Input = cloneInput(request.Input)
-		generate[i] = request
+		generate[i] = cloneGenerateRequest(request)
 	}
 	return decide, generate
 }
@@ -106,12 +111,12 @@ func copyDecision(r DecideResponse) DecideResponse {
 	return r
 }
 
-// Generate 始终返回配置文本，不模拟 token 截断或语义理解。
-// 调用方可以配置超长或空文本来验证自己的结果校验逻辑。
+// Generate 返回固定文本或当前工具轮次的脚本结果，不模拟语义理解。
+// 调用方可以配置超长、空文本及非法工具参数来验证边界。
 func (f *FakeLLM) Generate(ctx context.Context, request GenerateRequest) (GenerateResponse, error) {
 	f.generateCalls.Add(1)
 	f.requestMu.Lock()
-	request.Input = cloneInput(request.Input)
+	request = cloneGenerateRequest(request)
 	f.generateRequests = append(f.generateRequests, request)
 	f.requestMu.Unlock()
 	if err := waitFake(ctx, f.options.GenerateDelay); err != nil {
@@ -119,6 +124,18 @@ func (f *FakeLLM) Generate(ctx context.Context, request GenerateRequest) (Genera
 	}
 	if f.options.GenerateError != nil {
 		return GenerateResponse{}, f.options.GenerateError
+	}
+	if len(f.options.Responses) > 0 {
+		round := 0
+		for _, turn := range request.ToolHistory {
+			if turn.Role == "assistant" {
+				round++
+			}
+		}
+		if round >= len(f.options.Responses) {
+			return GenerateResponse{}, ErrInvalidResponse
+		}
+		return copyResponse(f.options.Responses[round]), nil
 	}
 	return copyResponse(f.options.Response), nil
 }
@@ -129,6 +146,7 @@ func cloneInput(input Input) Input {
 }
 
 func copyResponse(response GenerateResponse) GenerateResponse {
+	response.ToolCalls = append([]ToolCall(nil), response.ToolCalls...)
 	if response.Usage != nil {
 		usage := *response.Usage
 		response.Usage = &usage

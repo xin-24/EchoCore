@@ -66,6 +66,8 @@ type DecideResponse struct {
 }
 
 type GenerateRequest struct {
+	Tools        []ToolDefinition
+	ToolHistory  []ToolTurn
 	Input        Input
 	SystemPrompt string
 	// MaxOutputTokens 为输出 token 上限；零表示使用实现的默认值。
@@ -78,11 +80,13 @@ type Usage struct {
 }
 
 // Usage 为 nil 表示服务商没有提供用量，而不是零消耗。
-// Executor 应将空白 Text 视为无效回复，不能直接发送给用户。
+// 空白 Text 仅在存在工具调用时有效；工具执行方负责最终空回复保护。
 type GenerateResponse struct {
-	Text       string
-	Usage      *Usage
-	Diagnostic Diagnostic
+	ToolCalls    []ToolCall
+	Continuation string `json:"-"`
+	Text         string
+	Usage        *Usage
+	Diagnostic   Diagnostic
 }
 
 // Decider 判断是否适合参与，不负责生成回复或修改群状态。

@@ -190,6 +190,35 @@ GOPROXY=off GOSUMDB=off go test -count=1 -v ./internal/llm ./internal/agent
 
 ## Executor 与可切换 Provider
 
+### AI 图片表情包与 GIF
+
+支持从手动维护的本地素材库选择图片表情，不生成新图片，不读取 QQ 收藏，也不自动保存群友图片。参与判断仍由 Jev / Router 完成；Executor 通过 `list_stickers` / `select_sticker` 构造回复计划，统一由现有发送器提交，不允许模型直接发送任意 URL、文件路径或 CQ 码。
+
+配置步骤：
+
+1. 在 `data/stickers/` 放入自己的 PNG、JPEG 或 GIF（每个最多 2 MiB、单帧最多 400 万像素）。
+2. 参考根目录 `stickers.example.yaml`，编辑 `data/stickers/catalog.yaml`，填写名称、描述、标签、相对文件名，并将素材条目 `enabled` 改为 `true`。重复 ID、缺失文件或越界路径会阻止启动；素材更新后重启服务。
+3. 将 `config.yaml` 中的 `stickers.enabled` 改为 `true`，重启 Go 服务。素材目录相对于该配置文件解析，而不是终端工作目录。
+4. 私聊尝试“用一个无奈的猫猫表情回应我”；群聊先由白名单账号真实 @ 机器人发送 `/ai on`，再测试文字配表情和不带 @ 的自主参与。
+
+```yaml
+stickers:
+  enabled: true
+  directory: "data/stickers"
+  max_candidates: 8
+  max_tool_rounds: 4
+  cooldown_ms: 60000
+  repeat_window_ms: 300000
+```
+
+每轮最多一张图，文字在前、图片在后，以同一个 OneBot Action 和 echo 发送；允许只发表情。图片校验后使用 Base64 传输，NapCat 无需共享 Go 的本地目录。GIF 原始字节保留，但是否正常播放需在实际 QQ 端验收。协议参考 [NapCat 图片消息段](https://napneko.github.io/onebot/segment)。
+
+首版工具调用支持 `openai-compatible`。Ollama 原生接口走纯文字；兼容服务首次工具请求返回 400/422 时，在同一总超时内最多重试一次原始纯文字请求，这也可能是参数兼容问题，并不证明模型完全不支持工具。401/429 等错误不会因此重试。工具轮次上限指最多模型请求次数；查询后选择至少需要两次。工具阶段的用量在全部轮次都已知时以 `total_input_tokens` / `total_output_tokens` 记录；未知不记为零。思考续传数据只保留在本轮工具上下文，不进入聊天历史或日志。[DeepSeek 工具调用协议](https://api-docs.deepseek.com/guides/tool_calls/)
+
+冷却和重复记录按机器人、私聊/群聊、群开启周期隔离，成功回执才生效，重启或上下文过期会清空。素材失效或重复时保留可用文字；纯表情无法发送则沉默。发送超时不自动补发，避免结果未知时重复消息。日志中的 `Sticker reply planned` 仅代表计划，`OneBot reply sent` 才代表明确成功回执。模型不保证每轮都会选择图片。
+
+代码默认关闭；没有附带第三方图片，需要自行提供有权使用的素材。`data/`、本地配置和 `docs/` 不提交到 GitHub。
+
 ### 可选 Jev 分层决策
 
 普通群消息现在支持“规则过滤 → 参与限额 → Jev → 不确定时原 LLM 判断 → 生成回复”。私聊和开启群中的真实 @ 绕过参与判断；群关闭、命令权限、会话互斥和总超时规则保持不变。短消息不会因长度短就一律过滤。

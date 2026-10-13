@@ -38,6 +38,8 @@ type Record struct {
 }
 
 type window struct {
+	lastStickerID    string
+	lastStickerAt    time.Time
 	lastReply        time.Time
 	automaticReplies []time.Time
 	lastInputHash    [32]byte

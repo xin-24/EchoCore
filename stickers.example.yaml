@@ -1,0 +1,9 @@
+# 复制此清单内容到 data/stickers/catalog.yaml，并放入自己的素材后启用条目。
+# 文件必须是目录内的 PNG、JPEG 或 GIF，单文件最多 2 MiB，单帧最多 400 万像素。
+stickers:
+  - id: cat_speechless
+    name: 猫猫无语
+    description: 表达无奈或轻微吐槽，不适合严肃求助
+    tags: [无奈, 尴尬, 吐槽]
+    file: cat_speechless.gif
+    enabled: false

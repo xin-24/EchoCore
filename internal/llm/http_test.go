@@ -76,7 +76,7 @@ func TestHTTPDecideStrictParsing(t *testing.T) {
 				if len(request.Messages) != 2 || request.Messages[0].Content != decidePrompt {
 					t.Error("缺少判断提示词")
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": chatMessage{"assistant", answer}}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": chatMessage{Role: "assistant", Content: answer}}}})
 			}))
 			defer server.Close()
 			client, _ := NewHTTPClient(HTTPOptions{Provider: ProviderCompatible, BaseURL: server.URL, Model: "test"})

@@ -22,6 +22,7 @@ import (
 	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/settings"
+	"github.com/xin-24/EchoCore/internal/sticker"
 )
 
 const shutdownTimeout = 5 * time.Second
@@ -39,6 +40,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	view := configuration.View()
+	logger.Info("sticker settings loaded", "enabled", cfg.Stickers.Enabled, "available", cfg.StickerCatalog.Len(), "max_tool_rounds", cfg.Stickers.MaxToolRounds)
 	logger.Info("business settings loaded", "source", view.Source, "revision", view.Revision, "provider", view.Values.Model.Provider, "model_available", view.ModelAvailable, "jev_enabled", view.Values.Jev.Enabled, "jev_available", view.JevAvailable)
 
 	server := &http.Server{
@@ -113,7 +115,12 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		client = clients[0]
 	}
 	if client != nil || configuration != nil {
+		var library sticker.Library
+		if cfg.StickerCatalog.Len() > 0 {
+			library = cfg.StickerCatalog
+		}
 		executor = agent.NewExecutor(client, groupStates, logger, agent.ExecutorOptions{
+			Stickers: cfg.Stickers, StickerLibrary: library,
 			Timeout: cfg.LLM.Timeout, MaxConcurrent: cfg.LLM.MaxConcurrent,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars,
 			ContextStore: contexts, PersonaName: cfg.Persona.Name, PersonaStyle: cfg.Persona.Style,

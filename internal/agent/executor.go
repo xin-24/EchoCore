@@ -14,9 +14,12 @@ import (
 	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/settings"
+	"github.com/xin-24/EchoCore/internal/sticker"
 )
 
 type ExecutorOptions struct {
+	Stickers         sticker.Config
+	StickerLibrary   sticker.Library
 	Participation    participation.Policy
 	Timeout          time.Duration
 	MaxConcurrent    int
@@ -180,6 +183,7 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 		}
 	}
 	var sentText string
+	var sentStickerID string
 	decisionContext := llm.DecisionContext{BotName: options.PersonaName, Mentioned: incoming.Mentioned, Reference: "unknown"}
 	participationReason := ""
 	if contextKeyValid {
@@ -202,6 +206,20 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 	})
 	if session != nil {
 		work.Guard = session.Guard
+	}
+	// 与群会话保护组合，在实际网络写入前复核图片策略；不在这里做模型或文件 IO。
+	baseGuard := work.Guard
+	work.Guard = func(send func() error) error {
+		check := func() error {
+			if sentStickerID != "" && !e.contexts.StickerAllowed(contextKey, sentStickerID, time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, time.Duration(options.Stickers.RepeatWindowMS)*time.Millisecond) {
+				return context.Canceled
+			}
+			return send()
+		}
+		if baseGuard != nil {
+			return baseGuard(check)
+		}
+		return check()
 	}
 	work.Execute = func(parent context.Context) (message.OutgoingMessage, bool) {
 		defer func() { <-slots }()
@@ -257,8 +275,19 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 			return message.OutgoingMessage{}, false
 		}
 		prompt := systemPrompt(options, incoming)
-		response, err := client.Generate(ctx, llm.GenerateRequest{Input: input, SystemPrompt: prompt, MaxOutputTokens: options.MaxOutputTokens})
-		if err != nil || ctx.Err() != nil || strings.TrimSpace(response.Text) == "" {
+		request := llm.GenerateRequest{Input: input, SystemPrompt: prompt, MaxOutputTokens: options.MaxOutputTokens}
+		var response llm.GenerateResponse
+		var plan sticker.Plan
+		var err error
+		useStickers := options.Stickers.Enabled && options.StickerLibrary != nil && contextKeyValid && e.contexts.StickerAllowed(contextKey, "", time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, 0)
+		if useStickers {
+			plan, err = (sticker.Selector{Library: options.StickerLibrary, Config: options.Stickers}).Generate(ctx, client, request)
+			response = llm.GenerateResponse{Text: plan.Text, Usage: plan.Usage, Diagnostic: plan.Diagnostic}
+			e.logger.Info("Sticker reply planned", "reason", plan.Reason, "sticker_id", plan.StickerID)
+		} else {
+			response, err = client.Generate(ctx, request)
+		}
+		if err != nil || ctx.Err() != nil || (!useStickers && strings.TrimSpace(response.Text) == "") {
 			if ctx.Err() != nil {
 				err = ctx.Err()
 			}
@@ -275,10 +304,32 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 			text = string([]rune(text)[:options.MaxReplyChars-1]) + "…"
 		}
 		sentText = text
+		outgoing := replyFor(incoming, text)
+		if plan.StickerID != "" {
+			allowed := e.contexts.StickerAllowed(contextKey, plan.StickerID, time.Now(), time.Duration(options.Stickers.CooldownMS)*time.Millisecond, time.Duration(options.Stickers.RepeatWindowMS)*time.Millisecond)
+			if allowed {
+				candidate, data, resolveErr := options.StickerLibrary.Resolve(plan.StickerID)
+				if resolveErr == nil && sticker.ValidImage(data) {
+					outgoing.Image = &message.Image{ID: candidate.ID, Name: candidate.Name, Data: data}
+					sentStickerID = candidate.ID
+					sentText = text + "\n[发送表情：" + candidate.Name + "，" + candidate.Description + "]"
+				} else {
+					e.logger.Warn("Sticker unavailable", "sticker_id", plan.StickerID)
+				}
+			} else {
+				e.logger.Info("Sticker skipped", "reason", "cooldown_or_repeat", "sticker_id", plan.StickerID)
+			}
+		}
+		if ctx.Err() != nil || (text == "" && outgoing.Image == nil) {
+			return message.OutgoingMessage{}, false
+		}
 		attrs := []any{"group_id", incoming.GroupID, "user_id", incoming.UserID, "latency", time.Since(start), "config_revision", revision}
+		if useStickers && response.Usage != nil {
+			attrs = append(attrs, "total_input_tokens", response.Usage.InputTokens, "total_output_tokens", response.Usage.OutputTokens)
+		}
 		attrs = append(attrs, response.Diagnostic.LogFields("")...)
 		e.logger.Info("LLM generation completed", attrs...)
-		return replyFor(incoming, text), true
+		return outgoing, true
 	}
 	if contextKeyValid {
 		var delivered sync.Once
@@ -286,6 +337,9 @@ func (e *Executor) Prepare(incoming message.IncomingMessage) message.Work {
 			delivered.Do(func() {
 				if result.Success && (session == nil || session.Context().Err() == nil) {
 					e.contexts.AppendDelivered(contextKey, sentText, result.MessageID, time.Now(), incoming.IsGroup && !incoming.Mentioned)
+					if sentStickerID != "" {
+						e.contexts.RecordSticker(contextKey, sentStickerID, time.Now())
+					}
 				}
 			})
 		}
