@@ -15,12 +15,14 @@ import (
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/sticker"
+	"github.com/xin-24/EchoCore/internal/vision"
 	"gopkg.in/yaml.v3"
 )
 
 // fileConfig 刻意不定义任何密钥字段；误把密钥写入 YAML 会被拒绝。
 type fileConfig struct {
-	Admin struct {
+	Vision vision.Config `yaml:"vision"`
+	Admin  struct {
 		Enabled        bool   `yaml:"enabled"`
 		FrontendOrigin string `yaml:"frontend_origin"`
 	} `yaml:"admin"`
@@ -73,6 +75,7 @@ type fileConfig struct {
 
 func defaults() fileConfig {
 	var f fileConfig
+	f.Vision = vision.DefaultConfig()
 	f.Admin.FrontendOrigin = "http://127.0.0.1:5173"
 	f.Stickers = sticker.DefaultConfig()
 	f.Favorites = sticker.DefaultFavoritesConfig()
@@ -194,6 +197,10 @@ func plainNode(n *yaml.Node) bool {
 }
 
 func (f fileConfig) config() (Config, error) {
+	f.Vision.APIKey = os.Getenv("ECHOCORE_VISION_API_KEY")
+	if err := f.Vision.Validate(); err != nil {
+		return Config{}, err
+	}
 	if len(f.Persona.PromptFile) > 2048 || strings.ContainsAny(f.Persona.PromptFile, "\x00\r\n") {
 		return Config{}, errors.New("persona.prompt_file 路径无效")
 	}
@@ -273,6 +280,7 @@ func (f fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
+		Vision:      f.Vision,
 		Admin:       Admin{Enabled: f.Admin.Enabled, FrontendOrigin: f.Admin.FrontendOrigin, Key: os.Getenv("ECHOCORE_ADMIN_KEY")},
 		Favorites:   f.Favorites,
 		Stickers:    f.Stickers,

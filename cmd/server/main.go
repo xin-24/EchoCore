@@ -24,6 +24,7 @@ import (
 	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/settings"
 	"github.com/xin-24/EchoCore/internal/sticker"
+	"github.com/xin-24/EchoCore/internal/vision"
 )
 
 const shutdownTimeout = 5 * time.Second
@@ -127,7 +128,23 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 	groupStates := group.NewStateStore()
 	contexts := contextstore.New()
 	contexts.StartSweeper(shutdown)
-	groupStates.SetCloseHook(contexts.ClearGroup)
+	var visual *vision.Service
+	if cfg.Vision.Enabled {
+		visionClient, err := vision.NewHTTPClient(cfg.Vision)
+		if err != nil {
+			logger.Warn("Vision unavailable", "reason", "invalid_configuration")
+		} else {
+			visual = vision.New(cfg.Vision, visionClient, logger)
+			visual.Start(shutdown)
+		}
+	}
+	logger.Info("Vision settings loaded", "enabled", cfg.Vision.Enabled, "available", visual != nil, "auto_group", cfg.Vision.AutoGroup)
+	groupStates.SetCloseHook(func(id string) {
+		contexts.ClearGroup(id)
+		if visual != nil {
+			visual.ClearGroup(id)
+		}
+	})
 	var groupPermissions handler.ControlPermissions = group.NewAllowlist(cfg.Group.ControlUserIDs)
 	if configuration != nil {
 		groupPermissions = configuration
@@ -138,6 +155,10 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		client = clients[0]
 	}
 	if client != nil || configuration != nil {
+		var recognizer agent.ImageRecognizer
+		if visual != nil {
+			recognizer = visual
+		}
 		var library sticker.Library
 		var snapshots sticker.SnapshotProvider
 		if cfg.FavoriteService != nil {
@@ -147,6 +168,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 			library = cfg.StickerCatalog
 		}
 		executor = agent.NewExecutor(client, groupStates, logger, agent.ExecutorOptions{
+			Vision:           recognizer,
 			StickerSnapshots: snapshots,
 			Stickers:         cfg.Stickers, StickerLibrary: library,
 			Timeout: cfg.LLM.Timeout, MaxConcurrent: cfg.LLM.MaxConcurrent,

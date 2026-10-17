@@ -54,6 +54,21 @@ func (*Adapter) ToIncomingMessage(event onebotprotocol.Event) (message.IncomingM
 		IsGroup:          isGroup,
 		Mentioned:        mentioned,
 	}
+	for _, segment := range event.Message {
+		if segment.Type != "image" {
+			continue
+		}
+		if len(incoming.Images) >= 2 {
+			incoming.ImagesOmitted++
+			continue
+		}
+		// file 可能是本地路径或资源 ID；第一版只接收明确的 url。
+		address, _ := segment.Data["url"].(string)
+		if len(address) > 8192 {
+			address = ""
+		}
+		incoming.Images = append(incoming.Images, message.ImageAttachment{URL: address})
+	}
 	if isGroup {
 		incoming.GroupID = formatID(event.GroupID)
 	}

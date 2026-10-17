@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,13 +29,14 @@ func TestAdapterConvertsPrivateTextMessage(t *testing.T) {
 		t.Fatalf("ToIncomingMessage() error = %v", err)
 	}
 	want := message.IncomingMessage{
+		Images:    []message.ImageAttachment{{}},
 		Platform:  message.PlatformQQ,
 		SelfID:    "10001000",
 		UserID:    "20002000",
 		MessageID: "12345",
 		Text:      "hello world",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ToIncomingMessage() = %#v, want %#v", got, want)
 	}
 }
@@ -67,7 +69,7 @@ func TestAdapterConvertsGroupMentionMessage(t *testing.T) {
 		IsGroup:   true,
 		Mentioned: true,
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ToIncomingMessage() = %#v, want %#v", got, want)
 	}
 }

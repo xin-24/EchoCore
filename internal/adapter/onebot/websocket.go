@@ -392,7 +392,7 @@ func redactMessageContent(payload []byte) []byte {
 		switch node := item.(type) {
 		case map[string]any:
 			for key, child := range node {
-				if key == "raw_message" {
+				if key == "raw_message" || key == "url" || key == "file" {
 					node[key] = "[已隐藏]"
 					continue
 				}

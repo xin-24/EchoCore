@@ -50,14 +50,14 @@ func (r *Router) Route(incoming message.IncomingMessage) RouteResult {
 	switch {
 	case incoming.SelfID != "" && incoming.UserID == incoming.SelfID:
 		result.Reason = "self_message"
-	case text == "":
+	case text == "" && len(incoming.Images) == 0:
 		result.Reason = "empty_text"
 	case incoming.IsGroup && incoming.GroupID == "":
 		result.Reason = "missing_group_id"
 	default:
 		fields := strings.Fields(text)
 		switch {
-		case r.commands.SupportsCommand(fields[0]):
+		case len(fields) > 0 && r.commands.SupportsCommand(fields[0]):
 			if incoming.IsGroup && !incoming.Mentioned {
 				result.Reason = "command_requires_mention"
 			} else {

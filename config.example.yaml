@@ -3,6 +3,19 @@
 # 旧 SQLite 配置和旧非密钥环境变量不再参与启动配置。
 environment: development # development：彩色 Console；production：JSON
 
+# 开启后会把符合触发范围的聊天图片上传到指定模型服务商。
+# 第一版只支持 JPEG/PNG；图片不落盘，描述缓存按会话隔离。
+vision:
+  enabled: false
+  auto_group: false # false：仅私聊、开启群内 @；true：普通群图也可能产生识别费用
+  base_url: "" # API 根地址，例如 https://api.deepseek.com；自动追加 /chat/completions
+  model: "" # 填服务商实际支持图片的模型
+  token_field: "max_tokens"
+  allowed_hosts: [] # 按实际图片来源添加精确域名；不是模型 API 域名
+  timeout_ms: 30000 # 同时受 llm.timeout 的总任务预算约束
+  max_concurrent: 2
+  # 密钥仅从 ECHOCORE_VISION_API_KEY 读取，不自动复用聊天模型密钥
+
 admin:
   enabled: false # 网页另行启动，Go 仅提供 API
   frontend_origin: "http://127.0.0.1:5173"

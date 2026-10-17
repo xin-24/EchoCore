@@ -10,6 +10,7 @@ import (
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/sticker"
+	"github.com/xin-24/EchoCore/internal/vision"
 )
 
 type Environment string
@@ -20,6 +21,7 @@ const (
 )
 
 type Config struct {
+	Vision          vision.Config
 	Admin           Admin
 	Favorites       sticker.FavoritesConfig
 	FavoriteService *sticker.Service
