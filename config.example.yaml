@@ -3,6 +3,11 @@
 # 旧 SQLite 配置和旧非密钥环境变量不再参与启动配置。
 environment: development # development：彩色 Console；production：JSON
 
+admin:
+  enabled: false # 网页另行启动，Go 仅提供 API
+  frontend_origin: "http://127.0.0.1:5173"
+  # 后端环境变量 ECHOCORE_ADMIN_KEY：32～256 字节随机密钥；缺失时管理 API 禁用
+
 server:
   host: "127.0.0.1"
   port: 8080
@@ -55,6 +60,7 @@ stickers:
   repeat_window_ms: 300000 # 避免重复上一张表情；0 关闭，上限 3600000
 
 persona:
+  prompt_file: "" # 可选，角色 Markdown 文件；相对本 YAML 目录。配置后替代默认人设，重启生效
   name: "EchoCore"
   style: "友善、诚实、自然、简洁"
   group_reply_length: "简短"

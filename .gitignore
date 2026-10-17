@@ -15,6 +15,11 @@ data/
 # Build and test outputs
 bin/
 coverage.out
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/.env*
 
 # Editor and operating-system files
 .DS_Store

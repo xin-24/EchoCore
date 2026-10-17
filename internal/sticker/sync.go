@@ -39,6 +39,7 @@ func (s *Service) Sync(ctx context.Context, account string, token uint64, source
 		return ErrUnavailable
 	}
 	s.busy[account] = true
+	delete(s.queued, account)
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.busy, account); s.mu.Unlock() }()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -129,7 +130,9 @@ func (s *Service) Sync(ctx context.Context, account string, token uint64, source
 			}
 			// 内容变化撤销旧审批，防止同一来源 ID 被替换为不同图片。
 			r.Approved = old.Approved && old.Hash == r.Hash
+			r.Disabled = old.Disabled && old.Hash == r.Hash
 		}
+		r.Revision = revisionToken()
 		cached := len(item.data) == 0
 		if f, e := s.root.Open(r.Hash + ".img"); e == nil {
 			data, e := readImageFile(f)

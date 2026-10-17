@@ -133,7 +133,10 @@ func TestFavoritesDownloadFailureKeepsMetadataAndContentChangeRevokes(t *testing
 	}
 	yes := true
 	id := s.List("100")[0].ID
-	if err := s.Update("100", id, "猫", "开心", &yes); err != nil {
+	if err := s.Update("100", id, "猫", "开心", &yes); err == nil {
+		t.Fatal("缺少缓存不应允许批准")
+	}
+	if err := s.Update("100", id, "猫", "开心", nil); err != nil {
 		t.Fatal(err)
 	}
 	data := testImage(t, false)

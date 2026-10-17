@@ -20,6 +20,10 @@ import (
 
 // fileConfig 刻意不定义任何密钥字段；误把密钥写入 YAML 会被拒绝。
 type fileConfig struct {
+	Admin struct {
+		Enabled        bool   `yaml:"enabled"`
+		FrontendOrigin string `yaml:"frontend_origin"`
+	} `yaml:"admin"`
 	Favorites   sticker.FavoritesConfig `yaml:"qq_stickers"`
 	Stickers    sticker.Config          `yaml:"stickers"`
 	Environment Environment             `yaml:"environment"`
@@ -60,6 +64,7 @@ type fileConfig struct {
 		RepeatWindowMS int64 `yaml:"repeat_window_ms"`
 	} `yaml:"participation"`
 	Persona struct {
+		PromptFile       string `yaml:"prompt_file"`
 		Name             string `yaml:"name"`
 		Style            string `yaml:"style"`
 		GroupReplyLength string `yaml:"group_reply_length"`
@@ -68,6 +73,7 @@ type fileConfig struct {
 
 func defaults() fileConfig {
 	var f fileConfig
+	f.Admin.FrontendOrigin = "http://127.0.0.1:5173"
 	f.Stickers = sticker.DefaultConfig()
 	f.Favorites = sticker.DefaultFavoritesConfig()
 	f.Environment = EnvironmentDevelopment
@@ -119,7 +125,40 @@ func LoadFile(path string) (Config, error) {
 	if !filepath.IsAbs(cfg.Favorites.Directory) {
 		cfg.Favorites.Directory = filepath.Join(filepath.Dir(path), cfg.Favorites.Directory)
 	}
+	if cfg.Persona.PromptFile != "" {
+		promptPath := cfg.Persona.PromptFile
+		if !filepath.IsAbs(promptPath) {
+			promptPath = filepath.Join(filepath.Dir(path), promptPath)
+		}
+		cfg.Persona.Prompt, err = loadPersonaPrompt(promptPath)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	return cfg, nil
+}
+
+// 角色文件在启动时读取一次；不在每条消息到来时读盘，避免同一任务中人设变化。
+func loadPersonaPrompt(path string) (string, error) {
+	invalid := errors.New("persona.prompt_file 读取失败：需为非空 UTF-8 普通文本文件，最多 32 KiB")
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 32<<10 {
+		return "", invalid
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", invalid
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, (32<<10)+1))
+	if err != nil || len(data) > 32<<10 || !utf8.Valid(data) {
+		return "", invalid
+	}
+	prompt := strings.TrimSpace(strings.TrimPrefix(string(data), "\ufeff"))
+	if prompt == "" || strings.ContainsRune(prompt, 0) {
+		return "", invalid
+	}
+	return prompt, nil
 }
 
 func decode(data []byte) (Config, error) {
@@ -155,6 +194,18 @@ func plainNode(n *yaml.Node) bool {
 }
 
 func (f fileConfig) config() (Config, error) {
+	if len(f.Persona.PromptFile) > 2048 || strings.ContainsAny(f.Persona.PromptFile, "\x00\r\n") {
+		return Config{}, errors.New("persona.prompt_file 路径无效")
+	}
+	if f.Admin.Enabled {
+		u, err := url.Parse(f.Admin.FrontendOrigin)
+		if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || f.Server.Host != "127.0.0.1" {
+			return Config{}, errors.New("admin 仅支持带明确端口的本机回环 HTTP 入口")
+		}
+	}
+	if strings.HasPrefix(f.OneBot.Path, "/api/admin") {
+		return Config{}, errors.New("onebot.path 不能占用管理 API 路径")
+	}
 	if err := f.Favorites.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -222,11 +273,12 @@ func (f fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
+		Admin:       Admin{Enabled: f.Admin.Enabled, FrontendOrigin: f.Admin.FrontendOrigin, Key: os.Getenv("ECHOCORE_ADMIN_KEY")},
 		Favorites:   f.Favorites,
 		Stickers:    f.Stickers,
 		Environment: f.Environment, Server: Server{Host: f.Server.Host, Port: f.Server.Port},
 		OneBot: OneBot{Path: f.OneBot.Path, AccessToken: os.Getenv("ECHOCORE_ONEBOT_ACCESS_TOKEN")}, Group: Group{ControlUserIDs: ids},
 		LLM:     LLM{HTTP: http, Timeout: timeout, MaxConcurrent: f.LLM.MaxConcurrent, MaxOutputTokens: f.LLM.MaxOutputTokens, MaxInputChars: f.LLM.MaxInputChars, MaxReplyChars: f.LLM.MaxReplyChars},
-		Persona: Persona{Name: f.Persona.Name, Style: f.Persona.Style, GroupReplyLength: f.Persona.GroupReplyLength}, Jev: j, Participation: policy,
+		Persona: Persona{Name: f.Persona.Name, Style: f.Persona.Style, GroupReplyLength: f.Persona.GroupReplyLength, PromptFile: f.Persona.PromptFile}, Jev: j, Participation: policy,
 	}, nil
 }

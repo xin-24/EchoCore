@@ -20,6 +20,7 @@ const (
 )
 
 type Config struct {
+	Admin           Admin
 	Favorites       sticker.FavoritesConfig
 	FavoriteService *sticker.Service
 	Stickers        sticker.Config
@@ -34,7 +35,12 @@ type Config struct {
 	Persona         Persona
 }
 
-type Persona struct{ Name, Style, GroupReplyLength string }
+type Admin struct {
+	Enabled             bool
+	FrontendOrigin, Key string
+}
+
+type Persona struct{ Name, Style, GroupReplyLength, PromptFile, Prompt string }
 type Group struct{ ControlUserIDs []string }
 type Server struct {
 	Host string

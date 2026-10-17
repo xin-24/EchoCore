@@ -59,10 +59,10 @@ func TestExecutorRoutingAndOutput(t *testing.T) {
 	}
 }
 
-func TestPrivateSystemPromptUsesShortChatRules(t *testing.T) {
+func TestPrivateSystemPromptUsesRuntimeRules(t *testing.T) {
 	executor, _, _ := executorTest(t, llm.FakeOptions{}, ExecutorOptions{})
 	prompt := executor.systemPrompt(message.IncomingMessage{})
-	for _, required := range []string{"你是EchoCore，在私聊中聊天的机器人", "不超过 25 字", "不超过 100 字", "只回复最新的一条消息或话题", "当前对话者"} {
+	for _, required := range []string{"你是EchoCore，在私聊中聊天的机器人", "只回复最新的一条消息或话题", "当前对话者", "工具能力以本次请求实际提供的工具定义为准"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("私聊 System Prompt 缺少规则 %q：%s", required, prompt)
 		}
@@ -91,7 +91,7 @@ func TestExecutorReusesHistorySnapshotAndWritesBackOnlyOnConfirmedSend(t *testin
 	if len(decisions) != 2 || len(generations) != 2 {
 		t.Fatalf("模型请求记录错误：%d / %d", len(decisions), len(generations))
 	}
-	for _, required := range []string{"你是EchoCore，在群聊中聊天的机器人", "不超过 25 字", "不超过 100 字", "只回复最新的一条消息或话题", "针对最后发言者"} {
+	for _, required := range []string{"你是EchoCore，在群聊中聊天的机器人", "只回复最新的一条消息或话题", "针对最后发言者"} {
 		if !strings.Contains(generations[0].SystemPrompt, required) {
 			t.Fatalf("群聊 System Prompt 缺少规则 %q：%s", required, generations[0].SystemPrompt)
 		}

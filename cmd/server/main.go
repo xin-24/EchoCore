@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xin-24/EchoCore/internal/adapter/onebot"
+	"github.com/xin-24/EchoCore/internal/admin"
 	"github.com/xin-24/EchoCore/internal/agent"
 	"github.com/xin-24/EchoCore/internal/config"
 	"github.com/xin-24/EchoCore/internal/contextstore"
@@ -112,6 +113,16 @@ func newConfiguredHandler(logger *slog.Logger, cfg config.Config, shutdown conte
 
 func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Context, configuration *settings.Service, clients ...llm.Client) http.Handler {
 	mux := http.NewServeMux()
+	if cfg.Admin.Enabled {
+		management, err := admin.New(admin.Options{Origin: cfg.Admin.FrontendOrigin, BackendHost: cfg.Server.Address(), Key: cfg.Admin.Key})
+		if err != nil {
+			logger.Warn("管理 API 已禁用，请检查管理密钥和回环入口配置")
+		} else {
+			management.WithStickers(cfg.FavoriteService, cfg.StickerCatalog)
+			mux.Handle(admin.Prefix+"/", management)
+			logger.Info("管理 API 已启用，网页需单独启动", "frontend_origin", cfg.Admin.FrontendOrigin)
+		}
+	}
 	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
 	groupStates := group.NewStateStore()
 	contexts := contextstore.New()
@@ -142,6 +153,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxInputChars: cfg.LLM.MaxInputChars, MaxReplyChars: cfg.LLM.MaxReplyChars,
 			ContextStore: contexts, PersonaName: cfg.Persona.Name, PersonaStyle: cfg.Persona.Style,
 			GroupReplyLength: cfg.Persona.GroupReplyLength,
+			PersonaPrompt:    cfg.Persona.Prompt,
 			Settings:         configuration,
 		})
 	}
