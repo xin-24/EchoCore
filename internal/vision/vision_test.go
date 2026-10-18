@@ -18,8 +18,13 @@ import (
 	"time"
 
 	"github.com/xin-24/EchoCore/internal/contextstore"
+	"github.com/xin-24/EchoCore/internal/media"
 	"github.com/xin-24/EchoCore/internal/message"
 )
+
+func testPrepared() media.Prepared {
+	return media.Prepared{Type: "image", OriginalFrames: 1, Frames: []media.Frame{{Data: []byte("image"), MIME: "image/jpeg"}}}
+}
 
 func TestHTTPVisionRequestAndErrors(t *testing.T) {
 	status := 200
@@ -55,13 +60,13 @@ func TestHTTPVisionRequestAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := client.Describe(context.Background(), []byte("image"), "这是什么")
+	result, err := client.Describe(context.Background(), testPrepared(), "这是什么")
 	if err != nil || result.Description != "一只猫" || result.InputTokens != 123 {
 		t.Fatal(result, err)
 	}
 	for _, code := range []int{401, 403, 429, 500, 302} {
 		status = code
-		_, err = client.Describe(context.Background(), nil, "")
+		_, err = client.Describe(context.Background(), testPrepared(), "")
 		var failure *Failure
 		if !errors.As(err, &failure) || failure.Status != code || strings.Contains(err.Error(), "secret") {
 			t.Fatal(err)
@@ -69,9 +74,9 @@ func TestHTTPVisionRequestAndErrors(t *testing.T) {
 	}
 }
 
-type clientFunc func(context.Context, []byte, string) (Result, error)
+type clientFunc func(context.Context, media.Prepared, string) (Result, error)
 
-func (f clientFunc) Describe(c context.Context, b []byte, q string) (Result, error) {
+func (f clientFunc) Describe(c context.Context, b media.Prepared, q string) (Result, error) {
 	return f(c, b, q)
 }
 
@@ -88,7 +93,7 @@ func testService(t *testing.T, client Client) *Service {
 
 func TestCacheIsolationTaskAndClear(t *testing.T) {
 	var calls atomic.Int32
-	s := testService(t, clientFunc(func(context.Context, []byte, string) (Result, error) {
+	s := testService(t, clientFunc(func(context.Context, media.Prepared, string) (Result, error) {
 		calls.Add(1)
 		return Result{Description: "猫"}, nil
 	}))
@@ -129,7 +134,7 @@ func TestCacheIsolationTaskAndClear(t *testing.T) {
 func TestCancellationAndConcurrentDedup(t *testing.T) {
 	started, release := make(chan struct{}, 2), make(chan struct{})
 	var calls atomic.Int32
-	s := testService(t, clientFunc(func(ctx context.Context, _ []byte, _ string) (Result, error) {
+	s := testService(t, clientFunc(func(ctx context.Context, _ media.Prepared, _ string) (Result, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		select {
@@ -162,7 +167,7 @@ func TestCancellationAndConcurrentDedup(t *testing.T) {
 
 func TestClearDuringRecognitionDoesNotRepopulate(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
-	s := testService(t, clientFunc(func(context.Context, []byte, string) (Result, error) {
+	s := testService(t, clientFunc(func(context.Context, media.Prepared, string) (Result, error) {
 		close(started)
 		<-release
 		return Result{Description: "猫"}, nil
@@ -196,7 +201,7 @@ func TestInvalidResponsesTimeoutAndFailureFallback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = client.Describe(context.Background(), nil, "")
+		_, err = client.Describe(context.Background(), testPrepared(), "")
 		server.Close()
 		if err == nil {
 			t.Fatal("无效响应被接纳")
@@ -213,7 +218,7 @@ func TestInvalidResponsesTimeoutAndFailureFallback(t *testing.T) {
 	if err != nil || !strings.Contains(text, "识别失败") {
 		t.Fatal("显式请求缺少失败标记")
 	}
-	s.client = clientFunc(func(ctx context.Context, _ []byte, _ string) (Result, error) {
+	s.client = clientFunc(func(ctx context.Context, _ media.Prepared, _ string) (Result, error) {
 		<-ctx.Done()
 		return Result{}, ctx.Err()
 	})
@@ -226,9 +231,10 @@ func TestInvalidResponsesTimeoutAndFailureFallback(t *testing.T) {
 
 func TestCacheCapacityBounded(t *testing.T) {
 	s := testService(t, FakeClient{Result: Result{Description: "描述"}})
+	raw, _ := s.download(context.Background(), "")
 	for i := 0; i < 205; i++ {
 		key := cacheKey{Hash: strings.Repeat("x", i+1)}
-		if _, _, err := s.describe(context.Background(), key, nil, "", 0); err != nil {
+		if _, _, err := s.describe(context.Background(), key, raw, "", 0); err != nil {
 			t.Fatal(err)
 		}
 	}

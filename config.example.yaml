@@ -4,7 +4,7 @@
 environment: development # development：彩色 Console；production：JSON
 
 # 开启后会把符合触发范围的聊天图片上传到指定模型服务商。
-# 第一版只支持 JPEG/PNG；图片不落盘，描述缓存按会话隔离。
+# 支持 JPEG/PNG 和 GIF 最多 8 帧识别；图片不落盘，描述缓存按会话隔离。
 vision:
   enabled: false
   auto_group: false # false：仅私聊、开启群内 @；true：普通群图也可能产生识别费用
@@ -14,6 +14,10 @@ vision:
   allowed_hosts: [] # 按实际图片来源添加精确域名；不是模型 API 域名
   timeout_ms: 30000 # 同时受 llm.timeout 的总任务预算约束
   max_concurrent: 2
+  max_output_tokens: 2048 # 256～8192，含服务商可能计入的思考 Token
+  gif:
+    enabled: true # 仍受 vision.enabled 和原会话触发规则控制
+    max_frames: 8 # 2～8；单帧 GIF 不重复补帧
   # 密钥仅从 ECHOCORE_VISION_API_KEY 读取，不自动复用聊天模型密钥
 
 admin:

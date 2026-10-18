@@ -138,7 +138,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 			visual.Start(shutdown)
 		}
 	}
-	logger.Info("Vision settings loaded", "enabled", cfg.Vision.Enabled, "available", visual != nil, "auto_group", cfg.Vision.AutoGroup)
+	logger.Info("Vision settings loaded", "enabled", cfg.Vision.Enabled, "available", visual != nil, "auto_group", cfg.Vision.AutoGroup, "gif_enabled", cfg.Vision.GIF.Enabled, "gif_max_frames", cfg.Vision.GIF.MaxFrames, "max_output_tokens", cfg.Vision.MaxOutputTokens)
 	groupStates.SetCloseHook(func(id string) {
 		contexts.ClearGroup(id)
 		if visual != nil {

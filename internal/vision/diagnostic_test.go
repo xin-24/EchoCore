@@ -39,7 +39,7 @@ func TestResponseDiagnostics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := client.Describe(context.Background(), nil, "")
+			result, err := client.Describe(context.Background(), testPrepared(), "")
 			d := result.Diagnostic
 			var fields []any
 			if tc.kind == "" {
@@ -79,7 +79,7 @@ func TestResponseDiagnosticsMalformedAndUnknown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = client.Describe(context.Background(), nil, "")
+		_, err = client.Describe(context.Background(), testPrepared(), "")
 		server.Close()
 		var failure *Failure
 		if !errors.As(err, &failure) || failure.Kind != tc.kind || failure.Status != 200 {

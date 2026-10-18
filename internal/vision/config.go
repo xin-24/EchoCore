@@ -10,22 +10,32 @@ import (
 )
 
 type Config struct {
-	Enabled       bool     `yaml:"enabled"`
-	AutoGroup     bool     `yaml:"auto_group"`
-	BaseURL       string   `yaml:"base_url"`
-	Model         string   `yaml:"model"`
-	TokenField    string   `yaml:"token_field"`
-	AllowedHosts  []string `yaml:"allowed_hosts"`
-	TimeoutMS     int      `yaml:"timeout_ms"`
-	MaxConcurrent int      `yaml:"max_concurrent"`
-	APIKey        string   `yaml:"-"`
+	Enabled         bool      `yaml:"enabled"`
+	AutoGroup       bool      `yaml:"auto_group"`
+	BaseURL         string    `yaml:"base_url"`
+	Model           string    `yaml:"model"`
+	TokenField      string    `yaml:"token_field"`
+	AllowedHosts    []string  `yaml:"allowed_hosts"`
+	TimeoutMS       int       `yaml:"timeout_ms"`
+	MaxConcurrent   int       `yaml:"max_concurrent"`
+	APIKey          string    `yaml:"-"`
+	MaxOutputTokens int       `yaml:"max_output_tokens"`
+	GIF             GIFConfig `yaml:"gif"`
+}
+
+type GIFConfig struct {
+	Enabled   bool `yaml:"enabled"`
+	MaxFrames int  `yaml:"max_frames"`
 }
 
 func DefaultConfig() Config {
-	return Config{TokenField: "max_tokens", TimeoutMS: 30000, MaxConcurrent: 2}
+	return Config{TokenField: "max_tokens", TimeoutMS: 30000, MaxConcurrent: 2, MaxOutputTokens: 2048, GIF: GIFConfig{Enabled: true, MaxFrames: 8}}
 }
 
 func (c Config) Validate() error {
+	if c.MaxOutputTokens < 256 || c.MaxOutputTokens > 8192 || c.GIF.MaxFrames < 2 || c.GIF.MaxFrames > 8 {
+		return errors.New("vision 输出预算须为 256～8192，GIF 抽帧数须为 2～8")
+	}
 	if c.TimeoutMS < 1000 || c.TimeoutMS > 120000 || c.MaxConcurrent < 1 || c.MaxConcurrent > 8 || len(c.AllowedHosts) > 32 {
 		return errors.New("vision 超时、并发或主机数量超出范围")
 	}

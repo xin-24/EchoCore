@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -31,6 +32,7 @@ type Service struct {
 	client   Client
 	logger   *slog.Logger
 	download func(context.Context, string) ([]byte, error)
+	prepare  func(context.Context, []byte, bool, int) (media.Prepared, error)
 	slots    chan struct{}
 	mu       sync.Mutex
 	cache    map[cacheKey]entry
@@ -39,7 +41,7 @@ type Service struct {
 }
 
 func New(cfg Config, client Client, logger *slog.Logger) *Service {
-	return &Service{config: cfg, client: client, logger: logger, download: media.NewDownloader(cfg.AllowedHosts).Download, slots: make(chan struct{}, max(1, cfg.MaxConcurrent)), cache: map[cacheKey]entry{}, flights: map[cacheKey]chan struct{}{}}
+	return &Service{config: cfg, client: client, logger: logger, download: media.NewDownloader(cfg.AllowedHosts).Download, prepare: media.PrepareMedia, slots: make(chan struct{}, max(1, cfg.MaxConcurrent)), cache: map[cacheKey]entry{}, flights: map[cacheKey]chan struct{}{}}
 }
 
 func (s *Service) Allowed(in message.IncomingMessage) bool {
@@ -114,28 +116,29 @@ func (s *Service) Enrich(parent context.Context, scope contextstore.Key, in mess
 			s.logger.Warn("Vision image download failed", fields...)
 		}
 		if err == nil {
+			s.logger.Debug("Vision media stage", "stage", "downloaded", "message_id", in.MessageID, "index", i+1)
 			hash := sha256.Sum256(data)
-			data, err = media.Prepare(data)
+			task, _ := json.Marshal([]string{"vision-gif-v2", s.config.BaseURL, s.config.Model, in.Text, fmt.Sprint(s.config.GIF.Enabled), fmt.Sprint(s.config.GIF.MaxFrames), fmt.Sprint(s.config.MaxOutputTokens)})
+			taskHash := sha256.Sum256(task)
+			key := cacheKey{scope, hex.EncodeToString(hash[:]), hex.EncodeToString(taskHash[:])}
+			description, status, err = s.describe(ctx, key, data, in.Text, epoch, "message_id", in.MessageID, "index", i+1)
 			if err != nil {
-				status = "unsupported_or_invalid"
-				description = "格式不支持或图片无效，未识别"
-			}
-			if err == nil {
-				task, _ := json.Marshal([]string{"vision-v1", s.config.BaseURL, s.config.Model, in.Text})
-				taskHash := sha256.Sum256(task)
-				key := cacheKey{scope, hex.EncodeToString(hash[:]), hex.EncodeToString(taskHash[:])}
-				description, status, err = s.describe(ctx, key, data, in.Text, epoch)
-				if err != nil {
-					description = "图片识别失败，不得猜测图片内容"
-					fields := append(diagnosticFields(err), "message_id", in.MessageID, "index", i+1)
-					s.logger.Warn("Vision recognition failed", fields...)
+				logMessage := "Vision recognition failed"
+				description = "图片识别失败，不得猜测图片内容"
+				fields := append(diagnosticFields(err), "message_id", in.MessageID, "index", i+1)
+				var preparation *media.PrepareError
+				if errors.As(err, &preparation) {
+					logMessage = "Vision preprocessing failed"
+					fields = []any{"error_kind", preparation.Kind, "stage", preparation.Stage, "message_id", in.MessageID, "index", i + 1}
+					description = "格式不支持、图片无效或超过安全限制，未识别"
 				}
+				s.logger.Warn(logMessage, fields...)
 			}
 		}
 		if parent.Err() != nil {
 			return "", parent.Err()
 		}
-		s.logger.Info("Vision image processed", "status", status, "index", i+1)
+		s.logger.Info("Vision image processed", "status", status, "index", i+1, "message_id", in.MessageID)
 		if status == "recognized" || status == "cache_hit" {
 			recognized++
 		}
@@ -157,12 +160,16 @@ func (s *Service) Enrich(parent context.Context, scope contextstore.Key, in mess
 	return strings.TrimSpace(text), nil
 }
 
-func (s *Service) describe(ctx context.Context, key cacheKey, data []byte, question string, epoch uint64) (string, string, error) {
+func (s *Service) describe(ctx context.Context, key cacheKey, data []byte, question string, epoch uint64, fields ...any) (string, string, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", "vision_failed", err
+		}
 		s.mu.Lock()
 		s.prune()
 		if cached, ok := s.cache[key]; ok {
 			s.mu.Unlock()
+			s.logger.Info("Vision cache hit", fields...)
 			return cached.Text, "cache_hit", nil
 		}
 		if flight, ok := s.flights[key]; ok {
@@ -177,36 +184,57 @@ func (s *Service) describe(ctx context.Context, key cacheKey, data []byte, quest
 		done := make(chan struct{})
 		s.flights[key] = done
 		s.mu.Unlock()
-		result, err := s.client.Describe(ctx, data, question)
+		started := time.Now()
+		prepared, err := s.prepare(ctx, data, s.config.GIF.Enabled, s.config.GIF.MaxFrames)
+		var result Result
+		if err == nil {
+			for _, stage := range []string{"validated", "decoded", "sampled"} {
+				s.logger.Debug("Vision media stage", append([]any{"stage", stage}, fields...)...)
+			}
+			err = ctx.Err()
+		}
+		if err == nil {
+			size := 0
+			for _, frame := range prepared.Frames {
+				size += len(frame.Data)
+			}
+			metadata := append([]any{"media_type", prepared.Type, "original_frames", prepared.OriginalFrames, "sampled_frames", len(prepared.Frames), "duration_ms", prepared.DurationMS, "loop_count", prepared.LoopCount, "prepared_bytes", size, "preprocess_latency", time.Since(started)}, fields...)
+			s.logger.Info("Vision media prepared", metadata...)
+			result, err = s.client.Describe(ctx, prepared, question)
+		}
 		s.mu.Lock()
 		delete(s.flights, key)
 		close(done)
+		if err == nil && (len(result.Description) == 0 || len(result.Description) > 4800) {
+			err = &Failure{Kind: "invalid_response"}
+		}
 		if err == nil && ctx.Err() == nil && epoch == s.epoch {
 			// 每项至多 4800 字节，最多 200 项，总描述预算不超过 960000 字节。
-			if len(result.Description) == 0 || len(result.Description) > 4800 {
-				err = &Failure{Kind: "invalid_response"}
-			} else {
-				if len(s.cache) >= 200 {
-					var oldest cacheKey
-					var until time.Time
-					for k, v := range s.cache {
-						if until.IsZero() || v.Until.Before(until) {
-							oldest, until = k, v.Until
-						}
+			if len(s.cache) >= 200 {
+				var oldest cacheKey
+				var until time.Time
+				for k, v := range s.cache {
+					if until.IsZero() || v.Until.Before(until) {
+						oldest, until = k, v.Until
 					}
-					delete(s.cache, oldest)
 				}
-				s.cache[key] = entry{result.Description, time.Now().Add(30 * time.Minute)}
+				delete(s.cache, oldest)
 			}
+			s.cache[key] = entry{result.Description, time.Now().Add(30 * time.Minute)}
 		}
 		s.mu.Unlock()
 		if ctx.Err() != nil {
 			return "", "vision_failed", ctx.Err()
 		}
 		if err != nil {
+			var preparation *media.PrepareError
+			if errors.As(err, &preparation) {
+				return "", "unsupported_or_invalid", err
+			}
 			return "", "vision_failed", err
 		}
-		s.logger.Info("Vision recognition completed", result.Diagnostic.LogFields(200)...)
+		s.logger.Info("Vision recognition completed", append(result.Diagnostic.LogFields(200), fields...)...)
+		s.logger.Debug("Vision media stage", append([]any{"stage", "described"}, fields...)...)
 		return result.Description, "recognized", nil
 	}
 }
