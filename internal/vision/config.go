@@ -21,6 +21,8 @@ type Config struct {
 	APIKey          string    `yaml:"-"`
 	MaxOutputTokens int       `yaml:"max_output_tokens"`
 	GIF             GIFConfig `yaml:"gif"`
+	// DebugLocal 显式允许在开发终端输出图片描述，默认关闭。
+	DebugLocal bool `yaml:"debug_local"`
 }
 
 type GIFConfig struct {

@@ -7,6 +7,7 @@ environment: development # development：彩色 Console；production：JSON
 # 支持 JPEG/PNG 和 GIF 最多 8 帧识别；图片不落盘，描述缓存按会话隔离。
 vision:
   enabled: false
+  debug_local: false # 仅 development：DEBUG 输出帧时间和视觉描述（含图片隐私），排查后关闭
   auto_group: false # false：仅私聊、开启群内 @；true：普通群图也可能产生识别费用
   base_url: "" # API 根地址，例如 https://api.deepseek.com；自动追加 /chat/completions
   model: "" # 填服务商实际支持图片的模型

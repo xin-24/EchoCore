@@ -139,6 +139,9 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		}
 	}
 	logger.Info("Vision settings loaded", "enabled", cfg.Vision.Enabled, "available", visual != nil, "auto_group", cfg.Vision.AutoGroup, "gif_enabled", cfg.Vision.GIF.Enabled, "gif_max_frames", cfg.Vision.GIF.MaxFrames, "max_output_tokens", cfg.Vision.MaxOutputTokens)
+	if cfg.Vision.DebugLocal {
+		logger.Warn("本地视觉调试已开启，DEBUG 日志包含图片识别正文；请勿分享敏感日志，排查后关闭 vision.debug_local")
+	}
 	groupStates.SetCloseHook(func(id string) {
 		contexts.ClearGroup(id)
 		if visual != nil {

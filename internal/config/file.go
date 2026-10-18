@@ -225,6 +225,9 @@ func (f fileConfig) config() (Config, error) {
 	if f.Environment != EnvironmentDevelopment && f.Environment != EnvironmentProduction {
 		return Config{}, errors.New("environment 必须为 development 或 production")
 	}
+	if f.Vision.DebugLocal && f.Environment != EnvironmentDevelopment {
+		return Config{}, errors.New("vision.debug_local 仅允许在 development 环境开启，可能输出图片隐私内容")
+	}
 	if strings.TrimSpace(f.Server.Host) == "" || strings.ContainsAny(f.Server.Host, " /\t\r\n") || f.Server.Port < 1 || f.Server.Port > 65535 {
 		return Config{}, errors.New("server.host 或 server.port 无效")
 	}

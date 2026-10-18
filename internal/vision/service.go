@@ -24,6 +24,7 @@ type cacheKey struct {
 type entry struct {
 	Text  string
 	Until time.Time
+	Media debugMedia
 }
 
 // Service 的模型和提示词在实例生命周期内固定，实例不共享缓存。
@@ -170,6 +171,7 @@ func (s *Service) describe(ctx context.Context, key cacheKey, data []byte, quest
 		if cached, ok := s.cache[key]; ok {
 			s.mu.Unlock()
 			s.logger.Info("Vision cache hit", fields...)
+			s.logLocalDebug(ctx, "cache", cached.Media, cached.Text, fields...)
 			return cached.Text, "cache_hit", nil
 		}
 		if flight, ok := s.flights[key]; ok {
@@ -220,7 +222,7 @@ func (s *Service) describe(ctx context.Context, key cacheKey, data []byte, quest
 				}
 				delete(s.cache, oldest)
 			}
-			s.cache[key] = entry{result.Description, time.Now().Add(30 * time.Minute)}
+			s.cache[key] = entry{Text: result.Description, Until: time.Now().Add(30 * time.Minute), Media: debugMetadata(prepared)}
 		}
 		s.mu.Unlock()
 		if ctx.Err() != nil {
@@ -234,6 +236,7 @@ func (s *Service) describe(ctx context.Context, key cacheKey, data []byte, quest
 			return "", "vision_failed", err
 		}
 		s.logger.Info("Vision recognition completed", append(result.Diagnostic.LogFields(200), fields...)...)
+		s.logLocalDebug(ctx, "model", debugMetadata(prepared), result.Description, fields...)
 		s.logger.Debug("Vision media stage", append([]any{"stage", "described"}, fields...)...)
 		return result.Description, "recognized", nil
 	}

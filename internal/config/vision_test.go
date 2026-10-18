@@ -29,3 +29,17 @@ func TestVisionConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestVisionDebugLocalEnvironment(t *testing.T) {
+	cfg, err := decode([]byte("environment: development\n"))
+	if err != nil || cfg.Vision.DebugLocal {
+		t.Fatal("调试必须默认关闭", err)
+	}
+	cfg, err = decode([]byte("environment: development\nvision:\n  debug_local: true\n"))
+	if err != nil || !cfg.Vision.DebugLocal {
+		t.Fatal("开发环境无法启用调试", err)
+	}
+	if _, err = decode([]byte("environment: production\nvision:\n  debug_local: true\n")); err == nil || !strings.Contains(err.Error(), "debug_local") {
+		t.Fatal("生产环境未阻止正文调试", err)
+	}
+}
