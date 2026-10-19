@@ -21,9 +21,11 @@ import (
 	"github.com/xin-24/EchoCore/internal/handler"
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/logging"
+	"github.com/xin-24/EchoCore/internal/mcpclient"
 	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/settings"
 	"github.com/xin-24/EchoCore/internal/sticker"
+	"github.com/xin-24/EchoCore/internal/tools"
 	"github.com/xin-24/EchoCore/internal/vision"
 )
 
@@ -126,6 +128,11 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 	}
 	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
 	groupStates := group.NewStateStore()
+	remoteTools := mcpclient.New(cfg.MCP, cfg.Tools, logger, groupStates.Enabled)
+	remoteTools.Start(shutdown)
+	if cfg.ToolsRoundsMigrated {
+		logger.Warn("旧 stickers.max_tool_rounds=1 已迁移为通用工具最少 2 轮，请配置 tools.max_rounds")
+	}
 	contexts := contextstore.New()
 	contexts.StartSweeper(shutdown)
 	var visual *vision.Service
@@ -171,6 +178,10 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 			library = cfg.StickerCatalog
 		}
 		executor = agent.NewExecutor(client, groupStates, logger, agent.ExecutorOptions{
+			Tools: cfg.Tools,
+			AdditionalTools: func(ctx context.Context, in message.IncomingMessage, r *tools.Registry) error {
+				return remoteTools.Register(ctx, r, mcpclient.Identity{UserID: in.UserID, GroupID: in.GroupID, IsGroup: in.IsGroup})
+			},
 			Vision:           recognizer,
 			StickerSnapshots: snapshots,
 			Stickers:         cfg.Stickers, StickerLibrary: library,

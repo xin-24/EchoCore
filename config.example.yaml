@@ -94,3 +94,26 @@ qq_stickers:
 
 # 群开关、短期上下文和参与计数仍在内存，重启清空，不写数据库。
 # 短期上下文仍采用代码默认限额；当前 YAML 不支持 context 等额外字段。
+## 通用工具预算；最后一轮仅生成答复。显式值优先于旧 stickers.max_tool_rounds。
+tools:
+  max_rounds: 4
+  max_calls: 3
+  max_arguments_bytes: 8192
+  max_result_bytes: 8192
+
+## 默认关闭，不产生远程连接。首版仅支持公网 HTTPS Streamable HTTP、只读工具。
+## 修改启动配置后需重启；密钥仅放环境变量，不填在此文件。
+mcp:
+  enabled: false
+  servers: []
+  # 需要启用时，用下方结构替换 servers: []，不要保留两个 servers 字段。
+  # servers:
+  #   - name: knowledge
+  #     transport: streamable_http
+  #     url: "https://example.com/mcp" # 占位地址，替换为审核过的服务
+  #     enabled: true
+  #     token_env: "ECHOCORE_MCP_KNOWLEDGE_TOKEN" # 无鉴权服务可留空
+  #     allowed_tools: [search] # 远程真实名称，不支持通配符
+  #     allowed_users: ["123456789"] # 私聊、群聊均需用户授权
+  #     allowed_groups: [] # 空列表禁止在群内使用，不是全部允许
+  #     timeout_ms: 10000

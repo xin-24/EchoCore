@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -48,68 +47,35 @@ func (s Selector) Generate(ctx context.Context, g llm.Generator, request llm.Gen
 	}
 	original := request
 	request.SystemPrompt += expressionPrompt
-	allowed := map[string]bool{}
-	seenCalls := map[string]bool{}
-	var usage llm.Usage
-	usageKnown := true
 	var plan Plan
-	registry := s.registry(allowed, &plan)
-	request.Tools = registry.Definitions()
-	finish := func() Plan {
-		if usageKnown {
-			u := usage
-			plan.Usage = &u
-		}
-		return plan
+	registry := s.registry(map[string]bool{}, &plan)
+	budget := tools.DefaultConfig()
+	budget.MaxRounds = s.Config.MaxToolRounds
+	result, err := tools.Run(ctx, g, original, request, registry, budget)
+	if !result.Final {
+		plan.Text = result.Response.Text
+		plan.Reason = result.Reason
 	}
-	for round := 0; round < s.Config.MaxToolRounds; round++ {
-		if err := ctx.Err(); err != nil {
-			return Plan{}, err
-		}
-		response, err := g.Generate(ctx, request)
-		if round == 0 && errors.Is(err, llm.ErrToolsUnsupported) {
-			response, err = g.Generate(ctx, original)
-			if err == nil && len(response.ToolCalls) > 0 {
-				return Plan{}, llm.ErrInvalidResponse
-			}
-			return Plan{Text: response.Text, Reason: "tools_unavailable", Usage: response.Usage, Diagnostic: response.Diagnostic}, err
-		}
-		if err != nil {
-			return Plan{}, err
-		}
-		if err := ctx.Err(); err != nil {
-			return Plan{}, err
-		}
-		plan.Diagnostic = response.Diagnostic
-		if response.Usage == nil {
-			usageKnown = false
-		} else {
-			usage.InputTokens += response.Usage.InputTokens
-			usage.OutputTokens += response.Usage.OutputTokens
-		}
-		if len(response.ToolCalls) == 0 {
-			plan.Text, plan.Reason = response.Text, "text"
-			return finish(), nil
-		}
-		// 串行工具调用，防止模型在同轮并行查询和选择未知素材。
-		if len(response.ToolCalls) != 1 {
-			plan.Reason = "invalid_tool_calls"
-			return finish(), nil
-		}
-		call := response.ToolCalls[0]
-		if call.ID == "" || len(call.ID) > 128 || seenCalls[call.ID] || len(call.Arguments) > 2048 {
-			plan.Reason = "invalid_tool_calls"
-			return finish(), nil
-		}
-		seenCalls[call.ID] = true
-		result := registry.Execute(ctx, call)
-		if result.Final {
-			return finish(), nil
-		}
-		request.ToolHistory = append(request.ToolHistory, llm.ToolTurn{Role: "assistant", Text: response.Text, Calls: response.ToolCalls, Continuation: response.Continuation}, llm.ToolTurn{Role: "tool", CallID: call.ID, Text: result.Content})
+	plan.Usage = result.Response.Usage
+	plan.Diagnostic = result.Response.Diagnostic
+	return plan, err
+}
+
+// Register 将表情能力加入本轮工具集合，候选授权仍按回复隔离。
+func (s Selector) Register(r *tools.Registry, plan *Plan) (string, error) {
+	if s.Config.Validate() != nil || s.Library == nil {
+		return "", ErrCatalog
 	}
-	plan.Reason = "tool_limit"
-	return finish(), nil
+	own := s.registry(map[string]bool{}, plan)
+	for _, def := range own.Definitions() {
+		name := def.Name
+		if err := r.Register(def, func(ctx context.Context, raw string) tools.Result {
+			return own.Execute(ctx, llm.ToolCall{Name: name, Arguments: raw})
+		}); err != nil {
+			return "", err
+		}
+	}
+	return expressionPrompt, nil
 }
 
 // registry 为每轮创建独立的候选授权集，不共享模型输入或账号状态。

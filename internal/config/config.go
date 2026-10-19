@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/xin-24/EchoCore/internal/llm"
+	"github.com/xin-24/EchoCore/internal/mcpclient"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/sticker"
+	"github.com/xin-24/EchoCore/internal/tools"
 	"github.com/xin-24/EchoCore/internal/vision"
 )
 
@@ -21,20 +23,23 @@ const (
 )
 
 type Config struct {
-	Vision          vision.Config
-	Admin           Admin
-	Favorites       sticker.FavoritesConfig
-	FavoriteService *sticker.Service
-	Stickers        sticker.Config
-	StickerCatalog  *sticker.Catalog
-	Jev             llm.JevConfig
-	Participation   participation.Policy
-	Environment     Environment
-	Server          Server
-	OneBot          OneBot
-	Group           Group
-	LLM             LLM
-	Persona         Persona
+	MCP                 mcpclient.Config
+	Tools               tools.Config
+	ToolsRoundsMigrated bool
+	Vision              vision.Config
+	Admin               Admin
+	Favorites           sticker.FavoritesConfig
+	FavoriteService     *sticker.Service
+	Stickers            sticker.Config
+	StickerCatalog      *sticker.Catalog
+	Jev                 llm.JevConfig
+	Participation       participation.Policy
+	Environment         Environment
+	Server              Server
+	OneBot              OneBot
+	Group               Group
+	LLM                 LLM
+	Persona             Persona
 }
 
 type Admin struct {

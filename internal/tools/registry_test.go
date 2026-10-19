@@ -28,7 +28,7 @@ func TestRegistry(t *testing.T) {
 	if calls != 0 {
 		t.Fatal("未知或取消调用执行了工具")
 	}
-	if r.Execute(context.Background(), llm.ToolCall{Name: "list"}).Content != "ok" || calls != 1 {
+	if r.Execute(context.Background(), llm.ToolCall{Name: "list", Arguments: "{}"}).Content != "ok" || calls != 1 {
 		t.Fatal("未分发")
 	}
 }

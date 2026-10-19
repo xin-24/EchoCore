@@ -13,14 +13,23 @@ import (
 	"unicode/utf8"
 
 	"github.com/xin-24/EchoCore/internal/llm"
+	"github.com/xin-24/EchoCore/internal/mcpclient"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/sticker"
+	"github.com/xin-24/EchoCore/internal/tools"
 	"github.com/xin-24/EchoCore/internal/vision"
 	"gopkg.in/yaml.v3"
 )
 
 // fileConfig 刻意不定义任何密钥字段；误把密钥写入 YAML 会被拒绝。
 type fileConfig struct {
+	MCP   mcpclient.Config `yaml:"mcp"`
+	Tools struct {
+		MaxRounds         *int `yaml:"max_rounds"`
+		MaxCalls          int  `yaml:"max_calls"`
+		MaxArgumentsBytes int  `yaml:"max_arguments_bytes"`
+		MaxResultBytes    int  `yaml:"max_result_bytes"`
+	} `yaml:"tools"`
 	Vision vision.Config `yaml:"vision"`
 	Admin  struct {
 		Enabled        bool   `yaml:"enabled"`
@@ -75,6 +84,8 @@ type fileConfig struct {
 
 func defaults() fileConfig {
 	var f fileConfig
+	b := tools.DefaultConfig()
+	f.Tools.MaxCalls, f.Tools.MaxArgumentsBytes, f.Tools.MaxResultBytes = b.MaxCalls, b.MaxArgumentsBytes, b.MaxResultBytes
 	f.Vision = vision.DefaultConfig()
 	f.Admin.FrontendOrigin = "http://127.0.0.1:5173"
 	f.Stickers = sticker.DefaultConfig()
@@ -197,6 +208,20 @@ func plainNode(n *yaml.Node) bool {
 }
 
 func (f fileConfig) config() (Config, error) {
+	budget := tools.Config{MaxRounds: f.Stickers.MaxToolRounds, MaxCalls: f.Tools.MaxCalls, MaxArgumentsBytes: f.Tools.MaxArgumentsBytes, MaxResultBytes: f.Tools.MaxResultBytes}
+	migrated := false
+	if f.Tools.MaxRounds != nil {
+		budget.MaxRounds = *f.Tools.MaxRounds
+	} else if budget.MaxRounds == 1 {
+		budget.MaxRounds = 2
+		migrated = true
+	}
+	if err := budget.Validate(); err != nil {
+		return Config{}, err
+	}
+	if err := f.MCP.Resolve(os.Getenv); err != nil {
+		return Config{}, err
+	}
 	f.Vision.APIKey = os.Getenv("ECHOCORE_VISION_API_KEY")
 	if err := f.Vision.Validate(); err != nil {
 		return Config{}, err
@@ -283,6 +308,7 @@ func (f fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
+		MCP: f.MCP, Tools: budget, ToolsRoundsMigrated: migrated,
 		Vision:      f.Vision,
 		Admin:       Admin{Enabled: f.Admin.Enabled, FrontendOrigin: f.Admin.FrontendOrigin, Key: os.Getenv("ECHOCORE_ADMIN_KEY")},
 		Favorites:   f.Favorites,
