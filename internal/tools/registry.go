@@ -43,7 +43,10 @@ func (r *Registry) RegisterBounded(def llm.ToolDefinition, handler Handler, limi
 	for _, e := range r.entries {
 		size += 1 + DefinitionBytes(e.definition)
 	}
-	if len(r.entries) >= 12 || size > 64<<10 || limit < 1 || limit > 32768 {
+	if err := llm.ValidateToolCount(len(r.entries) + 1); err != nil {
+		return err
+	}
+	if size > 64<<10 || limit < 1 || limit > 32768 {
 		return errors.New("工具数量、定义或参数预算超限")
 	}
 	def.Schema = append(json.RawMessage(nil), def.Schema...)

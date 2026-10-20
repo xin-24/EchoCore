@@ -12,6 +12,10 @@ import (
 // Diagnostic 只保留固定分类与数字，不保存服务端正文、URL、密钥或思考内容。
 // 用量是否已知单独标记，避免把未知用量记录成零。
 type Diagnostic struct {
+	ToolCount            int
+	MaxTools             int
+	ToolHistoryCount     int
+	MaxToolHistory       int
 	Kind                 string
 	HTTPStatus           int
 	FinishReason         string
@@ -56,6 +60,8 @@ func Diagnose(err error) Diagnostic {
 	var network net.Error
 	var op *net.OpError
 	switch {
+	case errors.Is(err, ErrInvalidRequest):
+		kind = "invalid_request"
 	case errors.Is(err, context.Canceled):
 		kind = "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -116,7 +122,7 @@ func statusFailure(status int) error {
 
 func (d Diagnostic) safe() Diagnostic {
 	switch d.Kind {
-	case "", "unknown", "canceled", "timeout", "dns", "tls", "connection", "network", "invalid_response", "provider_error", "http_error", "invalid_request", "authentication", "quota", "permission", "not_found", "rate_limit", "redirect", "upstream", "invalid_json", "invalid_schema", "response_too_large", "empty_content", "output_limit", "content_filtered", "invalid_decision":
+	case "", "unknown", "canceled", "timeout", "dns", "tls", "connection", "network", "invalid_response", "provider_error", "http_error", "invalid_request", "authentication", "quota", "permission", "not_found", "rate_limit", "redirect", "upstream", "invalid_json", "invalid_schema", "response_too_large", "empty_content", "output_limit", "content_filtered", "invalid_decision", "too_many_tools", "tool_history_limit", "invalid_tool_history", "invalid_tool_schema":
 	default:
 		d.Kind = "unknown"
 	}
@@ -143,6 +149,12 @@ func (d Diagnostic) safe() Diagnostic {
 func (d Diagnostic) LogFields(prefix string) []any {
 	d = d.safe()
 	var out []any
+	if d.Kind == "too_many_tools" && d.ToolCount > 0 && d.MaxTools > 0 {
+		out = append(out, prefix+"tool_count", d.ToolCount, prefix+"max_tools", d.MaxTools)
+	}
+	if d.Kind == "tool_history_limit" && d.ToolHistoryCount > 0 && d.MaxToolHistory > 0 {
+		out = append(out, prefix+"tool_history_count", d.ToolHistoryCount, prefix+"max_tool_history", d.MaxToolHistory)
+	}
 	if d.Kind != "" {
 		out = append(out, prefix+"error_kind", d.Kind)
 	}

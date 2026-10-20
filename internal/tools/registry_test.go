@@ -3,10 +3,59 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/xin-24/EchoCore/internal/llm"
 )
+
+func TestRegistryAndHTTPShareToolLimit(t *testing.T) {
+	for count := 9; count <= llm.MaxTools; count++ {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			r := &Registry{}
+			for i := 0; i < count; i++ {
+				err := r.Register(llm.ToolDefinition{Name: fmt.Sprintf("tool_%d", i), Schema: json.RawMessage(`{"type":"object"}`)}, func(context.Context, string) Result { return Result{} })
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				requests++
+				var body struct {
+					Tools []json.RawMessage `json:"tools"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil || len(body.Tools) != count {
+					t.Errorf("实际发送工具数不符：%d，%v", len(body.Tools), err)
+				}
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"正常回复"},"finish_reason":"stop"}]}`)
+			}))
+			defer server.Close()
+			client, err := llm.NewHTTPClient(llm.HTTPOptions{Provider: llm.ProviderCompatible, BaseURL: server.URL, Model: "fake", APIKey: "test-key"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.Generate(context.Background(), llm.GenerateRequest{Input: llm.Input{Text: "你好"}, Tools: r.Definitions()})
+			if err != nil || result.Text != "正常回复" || requests != 1 {
+				t.Fatal(result, err, requests)
+			}
+		})
+	}
+	r := &Registry{}
+	for i := 0; i < llm.MaxTools; i++ {
+		if err := r.Register(llm.ToolDefinition{Name: fmt.Sprint(i), Schema: json.RawMessage(`{}`)}, func(context.Context, string) Result { return Result{} }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := r.Register(llm.ToolDefinition{Name: "overflow", Schema: json.RawMessage(`{}`)}, func(context.Context, string) Result { return Result{} })
+	d := llm.Diagnose(err)
+	if !errors.Is(err, llm.ErrInvalidRequest) || d.Kind != "too_many_tools" || d.ToolCount != 13 || d.MaxTools != 12 || len(r.Definitions()) != 12 {
+		t.Fatal(d, err)
+	}
+}
 
 func TestRegistry(t *testing.T) {
 	r := &Registry{}

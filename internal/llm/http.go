@@ -157,8 +157,11 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 	if len(request.Tools) > 0 && c.options.Provider != ProviderCompatible {
 		return GenerateResponse{}, ErrToolsUnsupported
 	}
-	if len(request.Tools) > 8 || len(request.ToolHistory) > 32 {
-		return GenerateResponse{}, ErrInvalidResponse
+	if err := ValidateToolCount(len(request.Tools)); err != nil {
+		return GenerateResponse{}, err
+	}
+	if len(request.ToolHistory) > MaxToolHistory {
+		return GenerateResponse{}, failure("tool_history_limit", ErrInvalidRequest, Diagnostic{ToolHistoryCount: len(request.ToolHistory), MaxToolHistory: MaxToolHistory})
 	}
 	if strings.TrimSpace(request.Input.Text) == "" || request.MaxOutputTokens < 0 {
 		return GenerateResponse{}, errors.New("模型输入为空或输出限制无效")
@@ -176,7 +179,7 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 	messages = append(messages, chatMessage{Role: "user", Content: request.Input.Text})
 	for _, turn := range request.ToolHistory {
 		if turn.Role != "assistant" && turn.Role != "tool" {
-			return GenerateResponse{}, ErrInvalidResponse
+			return GenerateResponse{}, failure("invalid_tool_history", ErrInvalidRequest, Diagnostic{})
 		}
 		messages = append(messages, chatMessage{Role: turn.Role, Content: turn.Text, ToolCalls: wireCalls(turn.Calls), ToolCallID: turn.CallID, Reasoning: turn.Continuation})
 	}
@@ -189,7 +192,7 @@ func (c *HTTPClient) generate(ctx context.Context, request GenerateRequest, deci
 		tools := make([]any, 0, len(request.Tools))
 		for _, tool := range request.Tools {
 			if !json.Valid(tool.Schema) {
-				return GenerateResponse{}, ErrInvalidResponse
+				return GenerateResponse{}, failure("invalid_tool_schema", ErrInvalidRequest, Diagnostic{})
 			}
 			tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": tool.Name, "description": tool.Description, "parameters": tool.Schema}})
 		}
