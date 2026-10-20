@@ -30,10 +30,17 @@ type GroupStateReader interface {
 // Router 优先识别命令，再根据群开关选择 AI 候选。
 // 当前仅做同步、低成本过滤，后续模型判断不能阻塞 WebSocket 读循环。
 type Router struct {
-	states   GroupStateReader
-	commands *message.Dispatcher
-	logger   *slog.Logger
-	executor *Executor
+	states    GroupStateReader
+	commands  *message.Dispatcher
+	logger    *slog.Logger
+	executor  *Executor
+	collector interface{ Collect(message.IncomingMessage) }
+}
+
+// WithCollector 收集路由通过的原文，不依赖 Executor 是否忙碌或 Jev 是否选择回复。
+func (r *Router) WithCollector(c interface{ Collect(message.IncomingMessage) }) *Router {
+	r.collector = c
+	return r
 }
 
 func NewRouter(states GroupStateReader, commands *message.Dispatcher, logger *slog.Logger, executors ...*Executor) *Router {
@@ -103,8 +110,13 @@ func (r *Router) prepare(incoming message.IncomingMessage, allowAI bool) message
 		reply, handled := r.commands.Dispatch(result.Message)
 		return message.Work{Reply: reply, HasReply: handled}
 	}
-	if allowAI && result.Kind == RouteAICandidate && r.executor != nil {
-		return r.executor.Prepare(result.Message)
+	if allowAI && result.Kind == RouteAICandidate {
+		if r.collector != nil {
+			r.collector.Collect(result.Message)
+		}
+		if r.executor != nil {
+			return r.executor.Prepare(result.Message)
+		}
 	}
 	return message.Work{}
 }

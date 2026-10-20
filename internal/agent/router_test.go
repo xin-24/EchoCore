@@ -11,6 +11,25 @@ import (
 	"github.com/xin-24/EchoCore/internal/message"
 )
 
+type recordingCollector struct{ messages []message.IncomingMessage }
+
+func (c *recordingCollector) Collect(in message.IncomingMessage) { c.messages = append(c.messages, in) }
+func TestCollectorReceivesOriginalCandidatesWithoutExecutor(t *testing.T) {
+	states := group.NewStateStore()
+	states.SetEnabled("300", true)
+	c := &recordingCollector{}
+	r := NewRouter(states, message.NewDispatcher(handler.NewPing()), slog.New(slog.NewTextHandler(io.Discard, nil))).WithCollector(c)
+	r.Prepare(message.IncomingMessage{SelfID: "100", UserID: "200", Text: "原始私聊"})
+	r.Prepare(message.IncomingMessage{SelfID: "100", UserID: "200", IsGroup: true, GroupID: "300", Text: "群里不必回复的自述"})
+	r.Prepare(message.IncomingMessage{SelfID: "100", UserID: "200", Text: "/ping"})
+	r.Prepare(message.IncomingMessage{SelfID: "100", UserID: "100", Text: "自己消息"})
+	states.SetEnabled("300", false)
+	r.Prepare(message.IncomingMessage{SelfID: "100", UserID: "200", IsGroup: true, GroupID: "300", Text: "关闭后不收集"})
+	if len(c.messages) != 2 || c.messages[0].Text != "原始私聊" {
+		t.Fatal(c.messages)
+	}
+}
+
 func TestRouterRoutes(t *testing.T) {
 	states := group.NewStateStore()
 	states.SetEnabled("enabled", true)

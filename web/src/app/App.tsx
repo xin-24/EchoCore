@@ -3,6 +3,7 @@ import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, errorText, setCSRF } from '../api/client'
 import { Stickers } from '../features/stickers/Stickers'
+import { Memories } from '../features/memory/Memories'
 import styles from './App.module.css'
 
 class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -34,5 +35,22 @@ export function App() {
   }
   const themeButton = <button className="quiet" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀ 浅色模式' : '☾ 深色模式'}</button>
   if (state !== 'ready') return <main className={styles.login}><div className={styles.theme}>{themeButton}</div><div className={styles.loginCard}><div className={styles.logo}>E<span>↗</span></div><p className="eyebrow">ECHOCORE / LOCAL CONSOLE</p><h1>让管理回归简单。</h1><p className="muted">收藏、审核、整理。你的机器人素材工作台。</p>{state === 'checking' ? <p role="status">正在验证管理会话…</p> : <form onSubmit={login}><label>管理密钥<input type="password" autoComplete="current-password" value={key} onChange={e => setKey(e.target.value)} required maxLength={256} placeholder="输入 ECHOCORE_ADMIN_KEY" /></label><p className="hint">使用后端环境变量中的管理密钥，不是 NapCat Token。</p>{error && <p className="error" role="alert">{error}</p>}<button className="primary" disabled={pending || !key}>{pending ? '正在验证…' : '进入管理后台 →'}</button></form>}<p className={styles.localNote}>仅本机访问 · 密钥不会存入浏览器</p></div></main>
-  return <div className={styles.layout}><aside className={styles.sidebar}><div className={styles.brand}><div className={styles.logo}>E<span>↗</span></div><div><strong>EchoCore</strong><small>机器人管理台</small></div></div><p className="eyebrow">日常管理</p><nav><NavLink to="/stickers">▧　表情库</NavLink></nav><div className={styles.roadmap}><p>先把表情整理好</p><small>运行概览、群控制与系统设置将按后续里程碑开放。</small></div><div className={styles.bottom}>{themeButton}<button className="quiet" disabled={pending} onClick={logout}>退出登录</button></div></aside><div className={styles.main}><header className={styles.top}><span>工作空间 <span className="muted"> / 素材管理</span></span><span className={styles.pill}>● 已建立管理会话</span></header>{error && <p className="error" role="alert">{error}</p>}<Boundary><Routes><Route path="/stickers" element={<Stickers />} /><Route path="/login" element={<Navigate to="/stickers" replace />} /><Route path="/" element={<Navigate to="/stickers" replace />} /><Route path="*" element={<section className="panel"><h1>页面不存在</h1><NavLink to="/stickers">返回表情库</NavLink></section>} /></Routes></Boundary><footer className={styles.footer}>EchoCore · 本机管理 <span>React 前端 / Go API</span></footer></div></div>
+  return <div className={styles.layout}>
+    <aside className={styles.sidebar}>
+      <div className={styles.brand}><div className={styles.logo}>E<span>↗</span></div><div><strong>EchoCore</strong><small>机器人管理台</small></div></div>
+      <p className="eyebrow">日常管理</p><nav><NavLink to="/stickers">▧　表情库</NavLink><NavLink to="/memories">▤　长期记忆</NavLink></nav>
+      <div className={styles.roadmap}><p>素材与记忆管理</p><small>运行概览、群控制与系统设置将按后续里程碑开放。</small></div>
+      <div className={styles.bottom}>{themeButton}<button className="quiet" disabled={pending} onClick={logout}>退出登录</button></div>
+    </aside>
+    <div className={styles.main}>
+      <header className={styles.top}><span>工作空间 <span className="muted"> / 机器人管理</span></span><span className={styles.pill}>● 已建立管理会话</span></header>
+      {error && <p className="error" role="alert">{error}</p>}
+      <Boundary><Routes>
+        <Route path="/stickers" element={<Stickers />} /><Route path="/memories" element={<Memories />} />
+        <Route path="/login" element={<Navigate to="/stickers" replace />} /><Route path="/" element={<Navigate to="/stickers" replace />} />
+        <Route path="*" element={<section className="panel"><h1>页面不存在</h1><NavLink to="/stickers">返回表情库</NavLink></section>} />
+      </Routes></Boundary>
+      <footer className={styles.footer}>EchoCore · 本机管理 <span>React 前端 / Go API</span></footer>
+    </div>
+  </div>
 }

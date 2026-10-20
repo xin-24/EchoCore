@@ -1,0 +1,8 @@
+.page { display: grid; gap: 1.25rem; padding: 38px; max-width: 1440px; margin: auto; }
+.fields { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; border: 0; padding: .5rem 0; }
+.fields label { min-width: 150px; flex: 1; }
+.editor { display: grid; gap: 1rem; border: 0; padding: .5rem 0; }
+.cards { display: grid; gap: 1rem; }
+.content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+@media (max-width: 640px) { .page { padding: 24px 16px; } .fields { flex-direction: column; align-items: stretch; } }

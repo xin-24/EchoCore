@@ -22,6 +22,7 @@ import (
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/logging"
 	"github.com/xin-24/EchoCore/internal/mcpclient"
+	"github.com/xin-24/EchoCore/internal/memory"
 	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/settings"
 	"github.com/xin-24/EchoCore/internal/sticker"
@@ -43,6 +44,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	cfg.MemoryService, err = memory.Open(ctx, cfg.Memory)
+	if err != nil {
+		logger.Error("长期记忆初始化失败，请检查数据库路径、权限及版本", "error", err)
+		os.Exit(1)
+	}
+	defer cfg.MemoryService.Close()
+	logger.Info("长期记忆配置已加载", "enabled", cfg.MemoryService != nil)
 	if cfg.Favorites.Enabled {
 		var local sticker.Library
 		if cfg.StickerCatalog.Len() > 0 {
@@ -122,12 +130,23 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 			logger.Warn("管理 API 已禁用，请检查管理密钥和回环入口配置")
 		} else {
 			management.WithStickers(cfg.FavoriteService, cfg.StickerCatalog)
+			management.WithMemory(cfg.MemoryService)
 			mux.Handle(admin.Prefix+"/", management)
 			logger.Info("管理 API 已启用，网页需单独启动", "frontend_origin", cfg.Admin.FrontendOrigin)
 		}
 	}
 	// 群状态随服务实例创建，连接重建时共享，进程重启后全部恢复为关闭。
 	groupStates := group.NewStateStore()
+	if cfg.MemoryService != nil && cfg.Memory.Auto.Enabled {
+		provider := memory.NewAutoProvider(cfg.Memory.Auto, os.Getenv("ECHOCORE_MEMORY_API_KEY"))
+		if provider == nil {
+			logger.Warn("自动记忆未就绪", "reason", "missing_model_or_key")
+		} else if err := cfg.MemoryService.StartAuto(shutdown, memory.AutoOptions{Extractor: provider, Reconciler: provider, Groups: groupStates, Logger: logger}); err != nil {
+			logger.Warn("自动记忆启动失败", "reason", "unavailable")
+		} else {
+			logger.Info("自动记忆已启动", "mode", cfg.Memory.Auto.Mode)
+		}
+	}
 	remoteTools := mcpclient.New(cfg.MCP, cfg.Tools, logger, groupStates.Enabled)
 	remoteTools.Start(shutdown)
 	if cfg.ToolsRoundsMigrated {
@@ -135,6 +154,11 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 	}
 	contexts := contextstore.New()
 	contexts.StartSweeper(shutdown)
+	if cfg.MemoryService != nil {
+		cfg.MemoryService.SetInvalidator(func(scope memory.Scope) {
+			contexts.ClearConversation(scope.Platform, scope.SelfID, scope.Type, scope.ConversationID)
+		})
+	}
 	var visual *vision.Service
 	if cfg.Vision.Enabled {
 		visionClient, err := vision.NewHTTPClient(cfg.Vision)
@@ -150,6 +174,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		logger.Warn("本地视觉调试已开启，DEBUG 日志包含图片识别正文；请勿分享敏感日志，排查后关闭 vision.debug_local")
 	}
 	groupStates.SetCloseHook(func(id string) {
+		cfg.MemoryService.InvalidateGroup(id)
 		contexts.ClearGroup(id)
 		if visual != nil {
 			visual.ClearGroup(id)
@@ -178,7 +203,8 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 			library = cfg.StickerCatalog
 		}
 		executor = agent.NewExecutor(client, groupStates, logger, agent.ExecutorOptions{
-			Tools: cfg.Tools,
+			Memory: cfg.MemoryService,
+			Tools:  cfg.Tools,
 			AdditionalTools: func(ctx context.Context, in message.IncomingMessage, r *tools.Registry) error {
 				return remoteTools.Register(ctx, r, mcpclient.Identity{UserID: in.UserID, GroupID: in.GroupID, IsGroup: in.IsGroup})
 			},
@@ -198,6 +224,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		handler.NewHelp(),
 		handler.NewAI(groupStates, groupPermissions),
 		handler.NewStickers(cfg.FavoriteService, groupPermissions),
+		handler.NewMemory(cfg.MemoryService, groupStates, groupPermissions),
 	)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -208,7 +235,7 @@ func buildHandler(logger *slog.Logger, cfg config.Config, shutdown context.Conte
 		logger,
 		shutdown,
 		cfg.OneBot.AccessToken,
-		agent.NewRouter(groupStates, dispatcher, logger, executor),
+		agent.NewRouter(groupStates, dispatcher, logger, executor).WithCollector(cfg.MemoryService),
 	).WithFavorites(cfg.FavoriteService, time.Duration(cfg.Favorites.SyncIntervalMS)*time.Millisecond))
 
 	return mux

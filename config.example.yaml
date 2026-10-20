@@ -101,6 +101,44 @@ tools:
   max_arguments_bytes: 8192
   max_result_bytes: 8192
 
+# 长期记忆首批：仅明确保存，无自动提取、Embedding 或新密钥。
+# 私聊用户和群号均须显式授权。群还需 /ai on；关闭群保留数据但不使用。
+# 本机管理员可查看全部已保存资料；召回内容可能发送给现有聊天 Provider。
+memory:
+  enabled: false
+  database: "data/memory/memory.db"
+  allowed_private_users: []
+  allowed_groups: []
+  recall_top_k: 3
+  max_injected_chars: 1500
+  max_entries_per_scope: 500
+  max_entries_total: 10000
+  # 自动提取是独立授权；只允许低风险自述，冲突进入候选审核。
+  # 密钥使用 ECHOCORE_MEMORY_API_KEY；不会隐式借用聊天模型密钥。
+  auto:
+    enabled: false
+    mode: auto_safe # review_all 表示全部先审核
+    grants: []
+    # grants:
+    #   - self_id: "123456789" # 机器人 QQ
+    #     type: private # 群聊用 group，同时需 /ai on
+    #     conversation_id: "987654321"
+    #     user_ids: ["987654321"] # 本人同意自动收录后才填写
+    model:
+      provider: openai-compatible
+      base_url: ""
+      model: ""
+      token_field: max_tokens
+      timeout_ms: 30000
+      max_output_tokens: 2048
+    trigger_count: 20
+    max_wait_seconds: 600
+    batch_size: 20
+    max_candidates_per_batch: 5
+    max_batches_per_scope_hour: 6
+    max_batches_total_hour: 30
+    pending_ttl_days: 7
+
 ## 默认关闭，不产生远程连接。首版仅支持公网 HTTPS Streamable HTTP、只读工具。
 ## 修改启动配置后需重启；密钥仅放环境变量，不填在此文件。
 mcp:

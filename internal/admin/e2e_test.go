@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xin-24/EchoCore/internal/memory"
+	"github.com/xin-24/EchoCore/internal/message"
 	"github.com/xin-24/EchoCore/internal/sticker"
 )
 
@@ -90,6 +93,28 @@ func TestE2EServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.WithStickers(favorites, catalog)
+	mcfg := memory.DefaultConfig()
+	mcfg.Enabled = true
+	mcfg.Database = filepath.Join(directory, "memory.db")
+	mcfg.AllowedPrivateUsers = []string{"200", "201"}
+	mcfg.Auto.Enabled = true
+	mcfg.Auto.Mode = "review_all"
+	mcfg.Auto.TriggerCount = 1
+	mcfg.Auto.Grants = []memory.Grant{{SelfID: "100", Type: "private", ConversationID: "201", UserIDs: []string{"201"}}}
+	memories, err := memory.Open(context.Background(), mcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memories.Close()
+	yes, no := true, false
+	if err = memories.StartAuto(context.Background(), memory.AutoOptions{
+		Extractor:  memory.FakeExtractor{Items: []memory.Proposal{{Kind: "preference", Topic: "code_explanation", Content: "用户偏好中文代码解释", Sources: []memory.Evidence{{Ref: "s1", Quote: "以后讲代码用中文吧"}}, SelfReport: &yes, Sensitive: &no, Uncertain: &no}}},
+		Reconciler: memory.FakeReconciler{Items: []memory.ReconcileItem{{Index: 0, Decision: "new"}}}, Now: func() time.Time { return time.Now().Add(-2 * time.Second) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	memories.Collect(message.IncomingMessage{Platform: "qq", SelfID: "100", UserID: "201", MessageID: "browser-only", Text: "以后讲代码用中文吧", Timestamp: time.Now()})
+	s.WithMemory(memories)
 	server := &http.Server{Addr: "127.0.0.1:18081", Handler: s}
 	t.Log("隔离管理测试服务启动：18081")
 	if err = server.ListenAndServe(); err != nil {

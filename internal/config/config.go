@@ -9,6 +9,7 @@ import (
 
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/mcpclient"
+	"github.com/xin-24/EchoCore/internal/memory"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/sticker"
 	"github.com/xin-24/EchoCore/internal/tools"
@@ -23,6 +24,8 @@ const (
 )
 
 type Config struct {
+	Memory              memory.Config
+	MemoryService       *memory.Service
 	MCP                 mcpclient.Config
 	Tools               tools.Config
 	ToolsRoundsMigrated bool

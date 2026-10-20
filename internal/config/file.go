@@ -14,6 +14,7 @@ import (
 
 	"github.com/xin-24/EchoCore/internal/llm"
 	"github.com/xin-24/EchoCore/internal/mcpclient"
+	"github.com/xin-24/EchoCore/internal/memory"
 	"github.com/xin-24/EchoCore/internal/participation"
 	"github.com/xin-24/EchoCore/internal/sticker"
 	"github.com/xin-24/EchoCore/internal/tools"
@@ -23,8 +24,9 @@ import (
 
 // fileConfig 刻意不定义任何密钥字段；误把密钥写入 YAML 会被拒绝。
 type fileConfig struct {
-	MCP   mcpclient.Config `yaml:"mcp"`
-	Tools struct {
+	Memory memory.Config    `yaml:"memory"`
+	MCP    mcpclient.Config `yaml:"mcp"`
+	Tools  struct {
 		MaxRounds         *int `yaml:"max_rounds"`
 		MaxCalls          int  `yaml:"max_calls"`
 		MaxArgumentsBytes int  `yaml:"max_arguments_bytes"`
@@ -84,6 +86,7 @@ type fileConfig struct {
 
 func defaults() fileConfig {
 	var f fileConfig
+	f.Memory = memory.DefaultConfig()
 	b := tools.DefaultConfig()
 	f.Tools.MaxCalls, f.Tools.MaxArgumentsBytes, f.Tools.MaxResultBytes = b.MaxCalls, b.MaxArgumentsBytes, b.MaxResultBytes
 	f.Vision = vision.DefaultConfig()
@@ -138,6 +141,9 @@ func LoadFile(path string) (Config, error) {
 	}
 	if !filepath.IsAbs(cfg.Favorites.Directory) {
 		cfg.Favorites.Directory = filepath.Join(filepath.Dir(path), cfg.Favorites.Directory)
+	}
+	if !filepath.IsAbs(cfg.Memory.Database) {
+		cfg.Memory.Database = filepath.Join(filepath.Dir(path), cfg.Memory.Database)
 	}
 	if cfg.Persona.PromptFile != "" {
 		promptPath := cfg.Persona.PromptFile
@@ -208,6 +214,18 @@ func plainNode(n *yaml.Node) bool {
 }
 
 func (f fileConfig) config() (Config, error) {
+	if err := f.Memory.Validate(); err != nil {
+		return Config{}, err
+	}
+	if f.Memory.Enabled {
+		count := 0
+		for _, server := range f.MCP.Servers {
+			count += len(server.AllowedTools)
+		}
+		if count > 9 {
+			return Config{}, errors.New("启用 memory 时最多批准 9 个 MCP 工具，为 recall_memory 预留位置")
+		}
+	}
 	budget := tools.Config{MaxRounds: f.Stickers.MaxToolRounds, MaxCalls: f.Tools.MaxCalls, MaxArgumentsBytes: f.Tools.MaxArgumentsBytes, MaxResultBytes: f.Tools.MaxResultBytes}
 	migrated := false
 	if f.Tools.MaxRounds != nil {
@@ -308,7 +326,7 @@ func (f fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		MCP: f.MCP, Tools: budget, ToolsRoundsMigrated: migrated,
+		Memory: f.Memory, MCP: f.MCP, Tools: budget, ToolsRoundsMigrated: migrated,
 		Vision:      f.Vision,
 		Admin:       Admin{Enabled: f.Admin.Enabled, FrontendOrigin: f.Admin.FrontendOrigin, Key: os.Getenv("ECHOCORE_ADMIN_KEY")},
 		Favorites:   f.Favorites,

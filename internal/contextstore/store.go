@@ -198,6 +198,17 @@ func (s *Store) ClearGroup(groupID string) {
 	}
 }
 
+// ClearConversation 清除指定机器人、会话的所有开启周期，不影响其他会话。
+func (s *Store) ClearConversation(platform, selfID, kind, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.windows {
+		if key.Platform == platform && key.SelfID == selfID && key.Type == kind && key.ConversationID == id {
+			delete(s.windows, key)
+		}
+	}
+}
+
 func (s *Store) sweep(now time.Time) {
 	if !s.lastSweep.IsZero() && now.Sub(s.lastSweep) < time.Minute {
 		return
